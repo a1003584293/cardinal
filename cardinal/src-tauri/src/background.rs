@@ -1,5 +1,5 @@
 use crate::{
-    commands::{NodeInfoRequest, SearchJob, WatchConfigUpdate},
+    commands::{NodeInfoRequest, RecentNodesRequest, SearchJob, WatchConfigUpdate},
     lifecycle::{APP_QUIT, AppLifecycleState, load_app_state, update_app_state},
     search_activity,
     window_controls::is_main_window_foreground,
@@ -32,6 +32,17 @@ pub struct StatusBarUpdate {
     pub rescan_errors: usize,
 }
 
+/// Icon request for the rows currently on screen. `icon_size` is the raster edge length in
+/// points requested by the frontend preset (32 for the list, up to 384 for tiled previews).
+#[derive(Debug, Clone)]
+pub struct IconViewportUpdate {
+    /// Echoed request id; kept for parity with the command signature and future deduplication.
+    #[allow(dead_code)]
+    pub id: u64,
+    pub viewport: Vec<SlabIndex>,
+    pub icon_size: f64,
+}
+
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct IconPayload {
@@ -44,7 +55,8 @@ pub struct BackgroundLoopChannels {
     pub update_window_state_rx: Receiver<()>,
     pub search_rx: Receiver<SearchJob>,
     pub node_info_rx: Receiver<NodeInfoRequest>,
-    pub icon_viewport_rx: Receiver<(u64, Vec<SlabIndex>)>,
+    pub icon_viewport_rx: Receiver<IconViewportUpdate>,
+    pub recent_nodes_rx: Receiver<RecentNodesRequest>,
     pub rescan_rx: Receiver<CancellationToken>,
     pub watch_config_rx: Receiver<WatchConfigUpdate>,
     pub icon_update_tx: Sender<IconPayload>,
@@ -213,6 +225,7 @@ fn handle_event_watcher_events(
     events: Vec<FsEvent>,
     history_ready: &mut bool,
     processed_events: &mut usize,
+    recent_snapshot: &mut Option<Vec<SlabIndex>>,
 ) {
     *processed_events += events.len();
 
@@ -238,7 +251,12 @@ fn handle_event_watcher_events(
         }
     }
 
+    let event_count = events.len();
     let handle_result = cache.handle_fs_events(events);
+    if event_count > 0 {
+        // The index changed, so the cached launch ranking is stale.
+        *recent_snapshot = None;
+    }
     if let Err(HandleFSEError::Rescan) = handle_result {
         info!("!!!!!!!!!! Rescan triggered !!!!!!!!");
         emit_status_bar_update(
@@ -254,12 +272,20 @@ fn handle_event_watcher_events(
     }
 }
 
+/// How many ranked entries the launch list keeps in memory. Each scroll-to-bottom serves the
+/// next page from this snapshot, so it must be comfortably larger than a few pages.
+const RECENT_SNAPSHOT_SIZE: usize = 5_000;
+
 fn handle_icon_viewport_update(
     cache: &mut SearchCache,
-    update: (u64, Vec<SlabIndex>),
+    update: IconViewportUpdate,
     icon_update_tx: &Sender<IconPayload>,
 ) {
-    let (_request_id, viewport) = update;
+    let IconViewportUpdate {
+        viewport,
+        icon_size,
+        ..
+    } = update;
 
     let nodes = cache.expand_file_nodes(&viewport);
     let icon_jobs: Vec<_> = viewport
@@ -288,7 +314,7 @@ fn handle_icon_viewport_update(
         .for_each(|(slab_index, path)| {
             let icon_update_tx = icon_update_tx.clone();
             spawn(move || {
-                if let Some(icon) = fs_icon::icon_of_path_ql(&path).map(|data| {
+                if let Some(icon) = fs_icon::icon_of_path_sized(&path, icon_size).map(|data| {
                     format!(
                         "data:image/png;base64,{}",
                         general_purpose::STANDARD.encode(&data)
@@ -316,11 +342,15 @@ pub fn run_background_event_loop(
         search_rx,
         node_info_rx,
         icon_viewport_rx,
+        recent_nodes_rx,
         rescan_rx,
         watch_config_rx,
         icon_update_tx,
     } = channels;
     let mut processed_events = 0usize;
+    // Ranked launch list, built lazily on the first page request and dropped whenever the
+    // index changes (FS events / rescan) so pages never show stale entries.
+    let mut recent_snapshot: Option<Vec<SlabIndex>> = None;
     let mut history_ready = load_app_state() == AppLifecycleState::Ready;
 
     let mut window_is_foreground = true;
@@ -364,6 +394,35 @@ pub fn run_background_event_loop(
                 let opts = SearchOptions::from(options);
                 let payload = cache.search_query_with_options(query, opts, cancellation_token);
                 result_tx.send(payload).expect("Failed to send result");
+            }
+            recv(recent_nodes_rx) -> request => {
+                let request = request.expect("Recent nodes channel closed");
+                let RecentNodesRequest {
+                    offset,
+                    limit,
+                    response_tx,
+                } = request;
+                // Rank ONCE and serve pages from that snapshot. Re-ranking per page is not
+                // stable: the scan has a wall-clock stat budget, so two calls can stop at
+                // different points and produce overlapping (or missing) pages.
+                if recent_snapshot.is_none() {
+                    recent_snapshot = cache.most_recent_nodes(
+                        RECENT_SNAPSHOT_SIZE,
+                        CancellationToken::noop(),
+                    );
+                }
+                let page = recent_snapshot
+                    .as_ref()
+                    .map(|ranked| {
+                        ranked
+                            .iter()
+                            .skip(offset)
+                            .take(limit)
+                            .copied()
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let _ = response_tx.send(page);
             }
             recv(node_info_rx) -> request => {
                 let request = request.expect("Node info channel closed");
@@ -413,6 +472,7 @@ pub fn run_background_event_loop(
                     events,
                     &mut history_ready,
                     &mut processed_events,
+                    &mut recent_snapshot,
                 );
             }
         }

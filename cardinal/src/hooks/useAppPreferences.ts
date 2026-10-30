@@ -78,6 +78,8 @@ export function useAppPreferences({
   }, []);
 
   useEffect(() => {
+    // These gates must all be satisfied before the backend is told to start indexing; when
+    // one of them never clears the app sits on the loading screen forever.
     if (isCheckingFullDiskAccess) {
       return;
     }
@@ -92,7 +94,12 @@ export function useAppPreferences({
     }
 
     logicStartedRef.current = true;
-    void invoke('start_logic', { watchRoot, ignorePaths, includePaths });
+    // If the hand-off fails, clear the latch so the effect can retry on the next dependency
+    // change instead of leaving the backend waiting forever.
+    void invoke('start_logic', { watchRoot, ignorePaths, includePaths }).catch((error) => {
+      console.error('Failed to start background logic, will retry', error);
+      logicStartedRef.current = false;
+    });
   }, [fullDiskAccessStatus, ignorePaths, includePaths, isCheckingFullDiskAccess, watchRoot]);
 
   const applyWatchConfig = useCallback(

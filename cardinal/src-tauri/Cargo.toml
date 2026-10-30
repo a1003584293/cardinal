@@ -46,6 +46,7 @@ fswalk.path = "../../fswalk"
 fs-icon.path = "../../fs-icon"
 search-cancel.path = "../../search-cancel"
 camino = "1.2.1"
+tauri-plugin-dialog = "2"
 
 [features]
 default = []

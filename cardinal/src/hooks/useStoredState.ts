@@ -18,7 +18,7 @@ export function useStoredState<T>({
   normalize,
   readErrorMessage,
   writeErrorMessage,
-}: UseStoredStateOptions<T>): [T, (next: T) => void] {
+}: UseStoredStateOptions<T>): [T, (next: T | ((prev: T) => T)) => void] {
   const [state, setState] = useState<T>(() => {
     if (typeof window === 'undefined') {
       return defaultValue;
@@ -46,19 +46,21 @@ export function useStoredState<T>({
   });
 
   const setStoredState = useCallback(
-    (next: T) => {
-      const normalized = normalize ? normalize(next) : next;
-      setState(normalized);
+    (next: T | ((prev: T) => T)) => {
+      setState((prev) => {
+        const resolved = typeof next === 'function' ? (next as (prev: T) => T)(prev) : next;
+        const normalized = normalize ? normalize(resolved) : resolved;
 
-      if (typeof window === 'undefined') {
-        return;
-      }
+        if (typeof window !== 'undefined') {
+          try {
+            window.localStorage.setItem(key, write(normalized));
+          } catch (error) {
+            console.warn(writeErrorMessage, error);
+          }
+        }
 
-      try {
-        window.localStorage.setItem(key, write(normalized));
-      } catch (error) {
-        console.warn(writeErrorMessage, error);
-      }
+        return normalized;
+      });
     },
     [key, normalize, write, writeErrorMessage],
   );

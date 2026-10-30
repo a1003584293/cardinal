@@ -226,3 +226,38 @@ describe('useFileSearch', () => {
     });
   });
 });
+
+describe('useFileSearch launch-list paging', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    window.localStorage.clear();
+    mockSearchSuccess([1, 2, 3] as SlabIndex[]);
+  });
+
+  it('appends a page without resetting the result version', async () => {
+    // `resultsVersion` resetting would wipe the row cache and the scroll position, undoing
+    // the scroll that requested the next page.
+    const { result } = renderHook(() => useFileSearch());
+    await waitFor(() => expect(result.current.state.results).toHaveLength(3));
+    const versionBefore = result.current.state.resultsVersion;
+
+    act(() => {
+      result.current.appendResults([4, 5] as SlabIndex[]);
+    });
+
+    expect(result.current.state.results).toEqual([1, 2, 3, 4, 5]);
+    expect(result.current.state.resultsVersion).toBe(versionBefore);
+    expect(result.current.state.resultCount).toBe(5);
+  });
+
+  it('ignores an empty page', async () => {
+    const { result } = renderHook(() => useFileSearch());
+    await waitFor(() => expect(result.current.state.results).toHaveLength(3));
+
+    act(() => {
+      result.current.appendResults([]);
+    });
+
+    expect(result.current.state.results).toEqual([1, 2, 3]);
+  });
+});

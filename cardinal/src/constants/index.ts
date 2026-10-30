@@ -43,3 +43,7 @@ export const OVERSCAN_ROW_COUNT = 1;
 
 export const MIN_COL_WIDTH = 30;
 export const MAX_COL_WIDTH = 10000;
+
+// Launch list ("most recent files") page size. The backend returns this many items per
+// request; scrolling near the bottom asks for the next page.
+export const RECENT_PAGE_SIZE = 200;

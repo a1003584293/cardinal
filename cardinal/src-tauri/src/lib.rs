@@ -8,23 +8,26 @@ mod window_controls;
 
 use anyhow::{Context, Result};
 use background::{
-    BackgroundLoopChannels, IconPayload, build_search_cache, emit_status_bar_update,
+    BackgroundLoopChannels, IconPayload, IconViewportUpdate, build_search_cache,
+    emit_status_bar_update,
     run_background_event_loop,
 };
 use cardinal_sdk::EventWatcher;
 use commands::{
-    NodeInfoRequest, SearchJob, SearchState, WatchConfigUpdate, activate_main_window,
-    close_quicklook, copy_files_to_clipboard, get_app_status, get_nodes_info, get_sorted_view,
-    hide_main_window, normalize_watch_config, open_in_finder, open_path, search,
+    NodeInfoRequest, RecentNodesRequest, SearchJob, SearchState, WatchConfigUpdate,
+    activate_main_window,
+    close_quicklook, copy_files_to_clipboard, get_app_status, get_nodes_info, get_recent_nodes,
+    get_sorted_view,
+    hide_main_window, normalize_watch_config, open_in_finder, open_path, read_text_file, search,
     set_tray_activation_policy, set_watch_config, start_logic, toggle_main_window,
-    toggle_quicklook, trigger_rescan, update_icon_viewport, update_quicklook,
+    toggle_quicklook, trigger_rescan, update_icon_viewport, update_quicklook, write_text_file,
 };
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, bounded, unbounded};
 use lifecycle::{
     APP_QUIT, AppLifecycleState, EXIT_REQUESTED, emit_app_state, load_app_state, update_app_state,
 };
 use once_cell::sync::OnceCell;
-use search_cache::{SearchCache, SlabIndex};
+use search_cache::SearchCache;
 use search_cancel::CancellationToken;
 use std::{
     path::{Path, PathBuf},
@@ -38,6 +41,13 @@ use window_controls::{activate_window, hide_window};
 
 static DB_PATH: OnceCell<PathBuf> = OnceCell::new();
 pub(crate) static LOGIC_START: OnceCell<Sender<LogicStartConfig>> = OnceCell::new();
+/// Holds a start request that arrived before `LOGIC_START` was initialised.
+///
+/// Tauri commands can be invoked as soon as the webview loads, which can happen while the
+/// `Builder` is still running. Dropping that request used to deadlock startup: the frontend
+/// latched "logic started" and never retried, while the background thread waited forever.
+static PENDING_LOGIC_START: parking_lot::Mutex<Option<LogicStartConfig>> =
+    parking_lot::Mutex::new(None);
 pub(crate) const DEFAULT_SYSTEM_IGNORE_PATH: &str = "/System/Volumes/Data";
 const FSE_LATENCY_SECS: f64 = 0.1;
 
@@ -60,7 +70,8 @@ pub fn run() -> Result<()> {
     let (finish_tx, finish_rx) = bounded::<Sender<Option<SearchCache>>>(1);
     let (search_tx, search_rx) = unbounded::<SearchJob>();
     let (node_info_tx, node_info_rx) = unbounded::<NodeInfoRequest>();
-    let (icon_viewport_tx, icon_viewport_rx) = unbounded::<(u64, Vec<SlabIndex>)>();
+    let (icon_viewport_tx, icon_viewport_rx) = unbounded::<IconViewportUpdate>();
+    let (recent_nodes_tx, recent_nodes_rx) = unbounded::<RecentNodesRequest>();
     let (rescan_tx, rescan_rx) = unbounded::<CancellationToken>();
     let (watch_config_tx, watch_config_rx) = unbounded::<WatchConfigUpdate>();
     let (icon_update_tx, icon_update_rx) = unbounded::<IconPayload>();
@@ -78,6 +89,7 @@ pub fn run() -> Result<()> {
     let update_window_state_tx_for_window = update_window_state_tx.clone();
     builder = builder
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_drag::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_macos_permissions::init())
@@ -117,6 +129,7 @@ pub fn run() -> Result<()> {
             search_tx,
             node_info_tx,
             icon_viewport_tx.clone(),
+            recent_nodes_tx.clone(),
             rescan_tx.clone(),
             watch_config_tx.clone(),
             update_window_state_tx.clone(),
@@ -124,6 +137,7 @@ pub fn run() -> Result<()> {
         .invoke_handler(tauri::generate_handler![
             search,
             get_nodes_info,
+            get_recent_nodes,
             get_sorted_view,
             update_icon_viewport,
             get_app_status,
@@ -131,6 +145,8 @@ pub fn run() -> Result<()> {
             set_watch_config,
             open_in_finder,
             open_path,
+            write_text_file,
+            read_text_file,
             toggle_quicklook,
             close_quicklook,
             update_quicklook,
@@ -154,6 +170,7 @@ pub fn run() -> Result<()> {
         search_rx,
         node_info_rx,
         icon_viewport_rx,
+        recent_nodes_rx,
         rescan_rx,
         watch_config_rx,
         icon_update_tx,
@@ -340,6 +357,12 @@ fn flush_cache_to_file_once(finish_tx: &Sender<Sender<Option<SearchCache>>>, db_
 }
 
 fn wait_for_logic_start(rx: Receiver<LogicStartConfig>) -> Option<LogicStartConfig> {
+    // A request may have landed before the sender existed; honour it first.
+    if let Some(pending) = PENDING_LOGIC_START.lock().take() {
+        info!("Using Full Disk Access grant that arrived early");
+        return Some(pending);
+    }
+
     info!("Waiting for Full Disk Access signal from the frontend");
     loop {
         if APP_QUIT.load(Ordering::Relaxed) {

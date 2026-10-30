@@ -30,6 +30,8 @@ type SearchState = {
 
 type SearchParams = {
   query: string;
+  // Filter preset fragment (e.g. `ext:mp4;mkv`) AND-ed with the typed query.
+  filterQuery: string;
   directoryQuery: string;
   directoryScopeOpen: boolean;
   caseSensitive: boolean;
@@ -67,6 +69,7 @@ type SearchAction =
         duration: number;
       };
     }
+  | { type: 'SEARCH_APPEND'; payload: { results: SlabIndex[] } }
   | { type: 'SEARCH_CANCELLED' }
   | { type: 'SET_LIFECYCLE_STATE'; payload: { status: AppLifecycleStatus } };
 
@@ -89,6 +92,7 @@ const initialSearchState: SearchState = {
 
 const initialSearchParams: SearchParams = {
   query: '',
+  filterQuery: '',
   directoryQuery: '',
   directoryScopeOpen: false,
   caseSensitive: false,
@@ -168,6 +172,14 @@ function reducer(state: SearchState, action: SearchAction): SearchState {
         resultCount: 0,
         highlightTerms: [],
       };
+    case 'SEARCH_APPEND':
+      // Appending (paging the launch list) must not bump `resultsVersion`: that would reset
+      // the row cache and scroll position, undoing the very scroll that triggered the load.
+      return {
+        ...state,
+        results: [...state.results, ...action.payload.results],
+        resultCount: state.resultCount + action.payload.results.length,
+      };
     case 'SEARCH_CANCELLED':
       return {
         ...state,
@@ -193,11 +205,32 @@ const searchParamOrNull = (value: string): string | null => (value.length > 0 ? 
 const activeDirectoryQuery = ({ directoryQuery, directoryScopeOpen }: SearchParams): string =>
   directoryScopeOpen ? directoryQuery : '';
 
+/**
+ * Combines the typed query with the filter preset. A filter with no text query is sent as the
+ * query itself so the backend evaluates it (e.g. choosing "Folders" alone browses folders).
+ */
+export const combineQueryWithFilter = (query: string, filterQuery: string): string => {
+  const trimmedQuery = query.trim();
+  const trimmedFilter = filterQuery.trim();
+  if (!trimmedFilter) {
+    return query;
+  }
+  if (!trimmedQuery) {
+    return trimmedFilter;
+  }
+  return `(${trimmedQuery}) ${trimmedFilter}`;
+};
+
 type UseFileSearchResult = {
   state: SearchState;
   searchParams: SearchParams;
   updateSearchParams: (patch: Partial<SearchParams>) => void;
   queueSearch: (query: string, options?: QueueSearchOptions) => void;
+  /** Appends a page to the current result set without resetting scroll or row caches. */
+  appendResults: (results: SlabIndex[]) => void;
+  queueFilterQuery: (filterQuery: string, options?: QueueSearchOptions) => void;
+  /** Applies a query and a filter together; used when a tab or bookmark restores both. */
+  queueSearchWithFilter: (query: string, filterQuery: string, options?: QueueSearchOptions) => void;
   queueDirectorySearch: (directoryQuery: string, options?: QueueSearchOptions) => void;
   queueDirectoryScopeOpen: (directoryScopeOpen: boolean) => void;
   handleStatusUpdate: (scannedFiles: number, processedEvents: number, rescanErrors: number) => void;
@@ -278,7 +311,8 @@ export function useFileSearch(): UseFileSearchResult {
     const requestVersion = searchVersionRef.current + 1;
     searchVersionRef.current = requestVersion;
 
-    const { query, caseSensitive } = nextSearch;
+    const { query, filterQuery, caseSensitive } = nextSearch;
+    const effectiveQuery = combineQueryWithFilter(query, filterQuery);
     const directoryQuery = activeDirectoryQuery(nextSearch);
     const startTs = performance.now();
     const isInitial = !hasInitialSearchRunRef.current;
@@ -295,7 +329,7 @@ export function useFileSearch(): UseFileSearchResult {
 
     try {
       const rawResults = await invoke<SearchResponsePayload>('search', {
-        query: searchParamOrNull(query),
+        query: searchParamOrNull(effectiveQuery),
         directoryQuery: searchParamOrNull(directoryQuery),
         options: {
           caseInsensitive: !caseSensitive,
@@ -385,6 +419,20 @@ export function useFileSearch(): UseFileSearchResult {
     [queueSearchParams],
   );
 
+  const queueFilterQuery = useCallback(
+    (filterQuery: string, options?: QueueSearchOptions) => {
+      queueSearchParams({ filterQuery }, options);
+    },
+    [queueSearchParams],
+  );
+
+  const queueSearchWithFilter = useCallback(
+    (query: string, filterQuery: string, options?: QueueSearchOptions) => {
+      queueSearchParams({ query, filterQuery }, options);
+    },
+    [queueSearchParams],
+  );
+
   const queueDirectorySearch = useCallback(
     (directoryQuery: string, options?: QueueSearchOptions) => {
       queueSearchParams({ directoryQuery }, options);
@@ -415,6 +463,13 @@ export function useFileSearch(): UseFileSearchResult {
     void handleSearch();
   }, [handleSearch, searchParams.caseSensitive]);
 
+  const appendResults = useCallback((appended: SlabIndex[]) => {
+    if (appended.length === 0) {
+      return;
+    }
+    dispatch({ type: 'SEARCH_APPEND', payload: { results: appended } });
+  }, []);
+
   const requestRescan = useCallback(async () => {
     await invoke('trigger_rescan');
   }, []);
@@ -424,6 +479,9 @@ export function useFileSearch(): UseFileSearchResult {
     searchParams,
     updateSearchParams,
     queueSearch,
+    appendResults,
+    queueFilterQuery,
+    queueSearchWithFilter,
     queueDirectorySearch,
     queueDirectoryScopeOpen,
     handleStatusUpdate,
