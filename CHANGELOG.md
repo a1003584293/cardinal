@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+- Merge newly added default ignore paths into lists saved by older releases. Without this, upgrades kept indexing `/Volumes` (network mounts), which made the first scan run for hours.
+- Persist folder-scope indexes (`scopes/scope-<hash>.db`) and reuse them for 30 minutes, so searching a slow network folder is instant on the next visit instead of re-walking it.
+- Load and build the index on a worker thread so searches answer immediately instead of queueing behind the initial walk.
+- Show index-build progress in the results pane, with a hint that a full folder path can be searched right away.
+- Allow searching a literal folder path through the folder scope box while the index is still building (temporary per-folder index).
+- Re-run the current query once the full index is ready so result rows always belong to the active cache.
+- Never persist a noop or temporary folder-scope index over the real cache snapshot.
+- Persist the first complete index right after it is built, so quitting before the app reaches `Ready` no longer forces a full re-walk on the next launch.
+
 ## 0.1.23 — 2026-03-25
 - Reduce power consumption by expanding the default ignored paths to cover more macOS cache, log, metadata, and runtime directories.
 - Further reduce background work by making the filesystem event watcher honor ignored paths.

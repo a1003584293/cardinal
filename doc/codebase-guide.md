@@ -288,6 +288,28 @@ cargo fmt --all
 40. **书签分隔线颜色**：新增 token `--bookmark-row-border`（浅色 `#495057`、深色 `#868e96`），刻意比 `--color-border` 深，1px 才看得见。改颜色只动这个 token，别去改 `border-bottom` 那行
 
 
+### 第十一轮（首次索引不再阻塞搜索）
+
+40.5. **忽略列表迁移（真正的"索引太慢"根因）**：`useIgnorePaths` 用 localStorage 覆盖默认值，老版本保存的列表里**没有 `/Volumes`**，于是整盘 walk 会进入所有 NFS/SMB 挂载（实测单个目录 readdir 就要 0.18s，一台机器上几百万文件 → 看起来永远在索引）。`migrateStoredIgnorePaths` 只在"列表全部由历史默认值组成"时合并新默认项；用户一旦手动编辑过（`cardinal.ignorePaths.userEdited`），永不迁移
+
+
+41. **索引构建移出事件循环**：`run_logic_thread` 不再同步 `try_read_persistent_cache` / `build_search_cache`，而是先用 `SearchCache::noop` 启动 `run_background_event_loop(..., Some(IndexingState { cancellation_token }))`，再 `spawn_index_load(...)` 在独立线程里加载缓存或走盘
+    - 结果通过 `index_build_tx`（`IndexBuildResult`）回传，循环里 `recv(index_build_rx)` 只在 **版本号等于当前 build token** 时安装，避免被取消的旧 walk 覆盖新索引
+    - 安装后：`indexing = None`、`recent_snapshot = None`、状态切 `Updating`、启动 `EventWatcher`
+    - `watch_config` 变更 / `trigger_rescan` 也走同一条异步路径（rescan 时 `force_walk = true`，不复用磁盘快照）
+42. **`search` 状态码新增 `INDEXING = 2`**：索引未就绪时（`indexing.is_some()`）搜索**立即返回**该状态而不是排队等待。前端 `useFileSearch` 收到后 dispatch `SEARCH_INDEXING`（`state.indexing = true`），结果区显示 `StateDisplay state="indexing"` + 扫描进度文案
+43. **文件夹范围可立即搜索（临时索引，不阻塞事件循环）**：索引没建好时，若范围框里是**字面路径**（`/abs/path`、`~/...`、可带引号、也可以只写名字按 `$HOME` 解析），后端 `spawn_scoped_index` 在**独立线程**里只走这个文件夹
+    - `parse_scope_path` 纯字符串解析，**绝不碰磁盘**：`is_dir()` 放到 worker 里，网络盘（如 `/Volumes/nfs_D`）可能卡好几秒
+    - `decide_search_action(scope, indexing, scoped, covered_by_full)` 是纯函数优先级：**已装好的范围索引 → 覆盖该文件夹的完整索引 → 新开一次走盘 → 等待**。顺序错了范围搜索会直接返回空，所以有单测
+    - 同一时刻只走一个范围；换范围会用各自的 `AtomicBool` 取消旧 walk（不会误取消整盘索引）；作用域包含 watch root 时直接跳过
+    - 关键坑：**SlabIndex 只对产出它的 cache 有效**。所以范围索引会**顶替**活动 cache，完整索引被停放在 `ScopedIndexState::parked_full`；任何不需要范围索引的查询会把它换回来，并从 `last_event_id` 重启 `EventWatcher`（FSEvents 会补发）
+    - 范围索引生效期间 watcher 置 `noop()`：FSEvents 绝不能写进不含这些路径的 slab
+    - 走盘完成后快照写到 `<app config>/scopes/scope-<fnv1a>.db`，30 分钟内再次搜索同一目录直接读快照（网络盘首搜 178s → 复搜毫秒级）；超过 50 万节点不落盘，7 天未用的快照会被清理
+    - `ignore_paths_for_scope` 会丢掉「是范围的祖先」的忽略项。否则 `/Volumes/nfs_D`（`/Volumes` 默认被忽略）会把**所有子项**过滤掉，索引为空——这条有回归测试
+    - 范围索引在使用中时整盘索引建完**不会**顶掉它，而是停放到 `parked_full`；换回普通搜索时才装回并重启 watcher，避免重复走盘
+44. **结果必须在完整索引就绪后重跑**：前端在 lifecycle 从 `Initializing` 变为 `Updating/Ready` 时（`previousLifecycleRef`）无条件重跑当前查询；范围索引则靠 `SCOPE_INDEX_POLL_MS`(800ms) 轮询重试，`SEARCH_INDEXING` reducer 在 scope/query 未变时返回原 state，避免每秒清空结果集
+45. **持久化保护**：`finish_rx` 与 10s flush tick 在 `indexing.is_some()` 或 `scoped.ready.is_some()` 时都不写盘（退出时若完整索引被停放则写它），防止把临时作用域索引或空索引写进 `cardinal.db`；另外 `spawn_index_load` 在**工作线程**里就把刚走完的索引落盘（被取代的 build 跳过写入），退出时的 `flush_cache_to_file_once` 也只在 `Initializing` 才跳过——首次索引一跑完就持久化，下次启动直接读缓存
+
 ## 9. 快速定位表（"我想改 X 应该去哪"）
 
 | 想改什么 | 去哪 |
@@ -314,6 +336,8 @@ cargo fmt --all
 | 搜索结果上限/浏览封顶 | `search-cache/src/cache.rs` 的 `DIRECTORY_BROWSE_LIMIT` |
 | 文件图标策略（系统应用图标 vs 封面图） | `fs-icon/src/lib.rs` 的 `prefers_cover_thumbnail` + `APP_ICON_CACHE` |
 | 启动"最近文件"列表 | `search-cache/src/cache.rs` 的 `most_recent_nodes` + `RECENT_NODE_LIMIT` |
+| 首次索引期间能否搜索 | `background.rs` 的 `spawn_index_load` / `spawn_scoped_index` / `decide_search_action` + `SEARCH_INDEXING`/`SCOPED_INDEXING` 状态 |
+| 忽略路径默认值迁移 | `useIgnorePaths.ts` 的 `migrateStoredIgnorePaths`（只迁移"全是历史默认值"的列表） |
 | 完全磁盘访问授权/免重启 | `useFullDiskAccessPermission.ts`（轮询）+ `PermissionOverlay.tsx` |
 | 启动闸门（何时开始索引） | `useAppPreferences.ts` 的 logic gate + 后端 `LOGIC_START` / `PENDING_LOGIC_START` |
 | 窗口显示/位置校正 | `window_controls.rs` 的 `activate_window` / `ensure_on_screen` |

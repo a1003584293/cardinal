@@ -28,6 +28,11 @@
   },
   "stateDisplay": {
     "loading": "正在搜索…",
+    "indexingTitle": "正在建立文件索引…",
+    "indexingMessage": "首次启动可能需要一些时间。想立即搜索，可在文件夹范围中输入完整路径（例如 ~/Documents）。",
+    "indexingProgress": "已扫描 {{formatted}} 个文件。想立即搜索，可在文件夹范围中输入完整路径（例如 ~/Documents）。",
+    "scopeIndexingTitle": "正在索引所选文件夹…",
+    "scopeIndexingMessage": "已在 {{scope}} 中扫描 {{formatted}} 项，索引完成后会自动显示结果。",
     "error": "搜索出现错误",
     "emptyTitle": "\"{{query}}\" 没有匹配结果",
     "emptyMessage": "尝试调整关键字或筛选条件。",

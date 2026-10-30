@@ -81,6 +81,8 @@ function App() {
     durationMs,
     resultCount,
     searchError,
+    indexing,
+    indexingScope,
     lifecycleState,
   } = state;
 
@@ -500,6 +502,7 @@ function App() {
 
   const displayState: DisplayState = (() => {
     if (!initialFetchCompleted) return 'loading';
+    if (indexing) return 'indexing';
     if (showLoadingUI) return 'loading';
     if (searchError) return 'error';
     if (results.length === 0) return 'empty';
@@ -507,6 +510,17 @@ function App() {
   })();
   const searchErrorMessage =
     typeof searchError === 'string' ? searchError : (searchError?.message ?? null);
+  // While the index is building, show what is being scanned instead of a bare spinner.
+  const scannedCount = scannedFiles.toLocaleString();
+  const stateMessage = !indexing
+    ? searchErrorMessage
+    : indexingScope
+      ? t('stateDisplay.scopeIndexingMessage', {
+          scope: indexingScope,
+          formatted: scannedCount,
+        })
+      : t('stateDisplay.indexingProgress', { formatted: scannedCount });
+  const stateTitle = indexing && indexingScope ? t('stateDisplay.scopeIndexingTitle') : null;
 
   const containerStyle = useMemo(
     () =>
@@ -818,7 +832,8 @@ function App() {
                 onResizeStart={onResizeStart}
                 onHeaderContextMenu={showFilesHeaderContextMenu}
                 displayState={displayState}
-                searchErrorMessage={searchErrorMessage}
+                stateMessage={stateMessage}
+                stateTitle={stateTitle}
                 currentQuery={currentQuery}
                 currentDirectoryQuery={currentDirectoryQuery}
                 resultsViewRef={virtualListRef}

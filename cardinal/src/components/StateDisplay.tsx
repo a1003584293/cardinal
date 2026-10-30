@@ -7,12 +7,14 @@ type StateProps = {
   message?: React.ReactNode;
 };
 
-export type DisplayState = 'loading' | 'error' | 'empty' | 'results';
+export type DisplayState = 'loading' | 'indexing' | 'error' | 'empty' | 'results';
 type EmptyState = Exclude<DisplayState, 'results'>;
 
 type StateDisplayProps = {
   state: EmptyState;
   message?: string | null;
+  /** Overrides the default title (used to name the folder being indexed). */
+  title?: string | null;
   query?: string;
   directoryQuery?: string;
 };
@@ -31,12 +33,23 @@ const State = ({ icon, title, message }: StateProps): React.JSX.Element => (
 export function StateDisplay({
   state,
   message,
+  title,
   query,
   directoryQuery,
 }: StateDisplayProps): React.JSX.Element {
   const { t } = useTranslation();
   if (state === 'loading') {
-    return <State icon={<div className="spinner" />} title={t('stateDisplay.loading')} />;
+    return <State icon={<div className="spinner" />} title={title ?? t('stateDisplay.loading')} />;
+  }
+
+  if (state === 'indexing') {
+    return (
+      <State
+        icon={<div className="spinner" />}
+        title={title ?? t('stateDisplay.indexingTitle')}
+        message={message ?? t('stateDisplay.indexingMessage')}
+      />
+    );
   }
 
   if (state === 'error') {

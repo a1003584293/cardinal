@@ -1,7 +1,7 @@
 import { useReducer, useRef, useCallback, useEffect, useState } from 'react';
 import type { MutableRefObject } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { SEARCH_DEBOUNCE_MS } from '../constants';
+import { SCOPE_INDEX_POLL_MS, SEARCH_DEBOUNCE_MS } from '../constants';
 import {
   SearchStatusCode,
   type AppLifecycleStatus,
@@ -25,6 +25,12 @@ type SearchState = {
   durationMs: number | null;
   resultCount: number;
   searchError: SearchError;
+  /** True when the backend answered with INDEXING because the initial index is still building. */
+  indexing: boolean;
+  /** Folder scope whose temporary index is being built, if any. */
+  indexingScope: string | null;
+  /** Bumped on every retry; the poll effect depends on it (the rest of the state is stable). */
+  indexingPoll: number;
   lifecycleState: AppLifecycleStatus;
 };
 
@@ -71,6 +77,10 @@ type SearchAction =
     }
   | { type: 'SEARCH_APPEND'; payload: { results: SlabIndex[] } }
   | { type: 'SEARCH_CANCELLED' }
+  | {
+      type: 'SEARCH_INDEXING';
+      payload: { query: string; directoryQuery: string; scope: string | null };
+    }
   | { type: 'SET_LIFECYCLE_STATE'; payload: { status: AppLifecycleStatus } };
 
 const initialSearchState: SearchState = {
@@ -87,6 +97,9 @@ const initialSearchState: SearchState = {
   durationMs: null,
   resultCount: 0,
   searchError: null,
+  indexing: false,
+  indexingScope: null,
+  indexingPoll: 0,
   lifecycleState: 'Initializing',
 };
 
@@ -161,6 +174,8 @@ function reducer(state: SearchState, action: SearchAction): SearchState {
         durationMs: action.payload.duration,
         resultCount: action.payload.count,
         searchError: null,
+        indexing: false,
+        indexingScope: null,
       };
     case 'SEARCH_FAILURE':
       return {
@@ -171,6 +186,8 @@ function reducer(state: SearchState, action: SearchAction): SearchState {
         durationMs: action.payload.duration,
         resultCount: 0,
         highlightTerms: [],
+        indexing: false,
+        indexingScope: null,
       };
     case 'SEARCH_APPEND':
       // Appending (paging the launch list) must not bump `resultsVersion`: that would reset
@@ -185,6 +202,37 @@ function reducer(state: SearchState, action: SearchAction): SearchState {
         ...state,
         showLoadingUI: false,
         initialFetchCompleted: true,
+        indexing: false,
+        indexingScope: null,
+      };
+    case 'SEARCH_INDEXING':
+      // Retries poll while an index is building. Do not bump `resultsVersion` (that would
+      // wipe the row cache every second), but do produce a new object and bump
+      // `indexingPoll`, otherwise the poll effect's dependencies never change and polling
+      // stops after the first retry.
+      if (
+        state.indexing &&
+        state.indexingScope === action.payload.scope &&
+        state.currentQuery === action.payload.query &&
+        state.currentDirectoryQuery === action.payload.directoryQuery
+      ) {
+        return { ...state, indexingPoll: state.indexingPoll + 1 };
+      }
+      return {
+        ...state,
+        results: [],
+        resultsVersion: state.resultsVersion + 1,
+        currentQuery: action.payload.query,
+        currentDirectoryQuery: action.payload.directoryQuery,
+        highlightTerms: [],
+        showLoadingUI: false,
+        initialFetchCompleted: true,
+        durationMs: null,
+        resultCount: 0,
+        searchError: null,
+        indexing: true,
+        indexingScope: action.payload.scope,
+        indexingPoll: state.indexingPoll + 1,
       };
     case 'SET_LIFECYCLE_STATE':
       return {
@@ -346,6 +394,25 @@ export function useFileSearch(): UseFileSearchResult {
         return;
       }
 
+      if (
+        rawResults.statusCode === SearchStatusCode.INDEXING ||
+        rawResults.statusCode === SearchStatusCode.SCOPED_INDEXING
+      ) {
+        cancelTimer(loadingDelayTimerRef);
+        dispatch({
+          type: 'SEARCH_INDEXING',
+          payload: {
+            query,
+            directoryQuery,
+            scope:
+              rawResults.statusCode === SearchStatusCode.SCOPED_INDEXING
+                ? (rawResults.scope ?? null)
+                : null,
+          },
+        });
+        return;
+      }
+
       const searchResults = rawResults.results as SlabIndex[];
       const highlightTerms = Array.isArray(rawResults.highlights)
         ? rawResults.highlights.filter((term): term is string => typeof term === 'string')
@@ -393,6 +460,40 @@ export function useFileSearch(): UseFileSearchResult {
       hasInitialSearchRunRef.current = true;
     }
   }, []);
+
+  // While the index is building the backend answers with INDEXING instead of blocking the
+  // search thread. Refresh the current query as soon as the index becomes available. This
+  // also replaces results that were served from a temporary folder-scope index: slab
+  // indices are only valid for the cache that produced them.
+  const previousLifecycleRef = useRef<AppLifecycleStatus | null>(null);
+  useEffect(() => {
+    const previous = previousLifecycleRef.current;
+    previousLifecycleRef.current = state.lifecycleState;
+    if (previous === null) {
+      // The first value only reports the status fetched on mount; the mount search covers it.
+      return;
+    }
+    const indexJustBecameAvailable =
+      previous === 'Initializing' && state.lifecycleState !== 'Initializing';
+    const stillIndexing = state.indexing && state.lifecycleState !== 'Initializing';
+    if (!indexJustBecameAvailable && !stillIndexing) {
+      return;
+    }
+    void handleSearch();
+  }, [handleSearch, state.indexing, state.lifecycleState]);
+
+  // A temporary folder-scope index finishes independently of the lifecycle (the full index
+  // may still be walking). Poll the backend while one is being built; the reducer keeps the
+  // state stable so this does not reset the result list on every tick.
+  useEffect(() => {
+    if (!state.indexing || state.indexingScope === null) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      void handleSearch();
+    }, SCOPE_INDEX_POLL_MS);
+    return () => clearTimeout(timer);
+  }, [handleSearch, state.indexing, state.indexingScope, state.indexingPoll]);
 
   const queueSearchParams = useCallback(
     (patch: Partial<SearchParams>, options?: QueueSearchOptions) => {

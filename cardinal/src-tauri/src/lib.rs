@@ -8,24 +8,20 @@ mod window_controls;
 
 use anyhow::{Context, Result};
 use background::{
-    BackgroundLoopChannels, IconPayload, IconViewportUpdate, build_search_cache,
-    emit_status_bar_update,
-    run_background_event_loop,
+    BackgroundLoopChannels, IconPayload, IconViewportUpdate, IndexBuildResult, IndexingState,
+    ScopedIndexResult, run_background_event_loop, spawn_index_load,
 };
 use cardinal_sdk::EventWatcher;
 use commands::{
     NodeInfoRequest, RecentNodesRequest, SearchJob, SearchState, WatchConfigUpdate,
-    activate_main_window,
-    close_quicklook, copy_files_to_clipboard, get_app_status, get_nodes_info, get_recent_nodes,
-    get_sorted_view,
-    hide_main_window, normalize_watch_config, open_in_finder, open_path, read_text_file, search,
-    set_tray_activation_policy, set_watch_config, start_logic, toggle_main_window,
-    toggle_quicklook, trigger_rescan, update_icon_viewport, update_quicklook, write_text_file,
+    activate_main_window, close_quicklook, copy_files_to_clipboard, get_app_status, get_nodes_info,
+    get_recent_nodes, get_sorted_view, hide_main_window, normalize_watch_config, open_in_finder,
+    open_path, read_text_file, search, set_tray_activation_policy, set_watch_config, start_logic,
+    toggle_main_window, toggle_quicklook, trigger_rescan, update_icon_viewport, update_quicklook,
+    write_text_file,
 };
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, bounded, unbounded};
-use lifecycle::{
-    APP_QUIT, AppLifecycleState, EXIT_REQUESTED, emit_app_state, load_app_state, update_app_state,
-};
+use lifecycle::{APP_QUIT, AppLifecycleState, EXIT_REQUESTED, emit_app_state, load_app_state};
 use once_cell::sync::OnceCell;
 use search_cache::SearchCache;
 use search_cancel::CancellationToken;
@@ -74,6 +70,8 @@ pub fn run() -> Result<()> {
     let (recent_nodes_tx, recent_nodes_rx) = unbounded::<RecentNodesRequest>();
     let (rescan_tx, rescan_rx) = unbounded::<CancellationToken>();
     let (watch_config_tx, watch_config_rx) = unbounded::<WatchConfigUpdate>();
+    let (index_build_tx, index_build_rx) = unbounded::<IndexBuildResult>();
+    let (scoped_index_tx, scoped_index_rx) = unbounded::<ScopedIndexResult>();
     let (icon_update_tx, icon_update_rx) = unbounded::<IconPayload>();
     let (update_window_state_tx, update_window_state_rx) = bounded::<()>(1);
     let (logic_start_tx, logic_start_rx) = bounded(1);
@@ -173,6 +171,10 @@ pub fn run() -> Result<()> {
         recent_nodes_rx,
         rescan_rx,
         watch_config_rx,
+        index_build_rx,
+        index_build_tx: index_build_tx.clone(),
+        scoped_index_rx,
+        scoped_index_tx,
         icon_update_tx,
         update_window_state_rx,
     };
@@ -197,7 +199,7 @@ pub fn run() -> Result<()> {
                 return;
             };
 
-            run_logic_thread(app_handle, db_path, channels, config);
+            run_logic_thread(app_handle, db_path, channels, config, index_build_tx);
         });
 
         app.run(move |app_handle, event| match event {
@@ -243,6 +245,7 @@ fn run_logic_thread(
     db_path: &Path,
     channels: BackgroundLoopChannels,
     config: LogicStartConfig,
+    index_build_tx: Sender<IndexBuildResult>,
 ) {
     let Some((watch_root, ignore_paths, include_paths)) = normalize_watch_config(
         &config.watch_root,
@@ -253,70 +256,33 @@ fn run_logic_thread(
         warn!("Invalid watch root in start config; skipping background startup");
         return;
     };
-    let path = PathBuf::from(&watch_root);
     let ignore_paths: Vec<_> = ignore_paths.into_iter().map(PathBuf::from).collect();
     let include_paths: Vec<_> = include_paths.into_iter().map(PathBuf::from).collect();
 
-    let mut cache = match SearchCache::try_read_persistent_cache(
-        &path,
-        db_path,
-        &ignore_paths,
-        &include_paths,
+    // Cache loading and filesystem walking happen on a worker so search requests can be
+    // serviced immediately. A literal folder scope can even be searched during the initial
+    // walk via a temporary index of just that folder.
+    let scan_cancellation_token = CancellationToken::new_scan();
+    spawn_index_load(
+        app_handle.clone(),
+        watch_root.clone(),
+        ignore_paths.clone(),
+        include_paths.clone(),
+        db_path.to_path_buf(),
+        scan_cancellation_token,
+        false,
+        index_build_tx,
+    );
+
+    let cache = SearchCache::noop(
+        PathBuf::from(&watch_root),
+        ignore_paths,
+        include_paths,
         &APP_QUIT,
-    ) {
-        Ok(cached) => {
-            info!("Loaded existing cache");
-            emit_status_bar_update(app_handle, cached.get_total_files(), 0, 0);
-            cached
-        }
-        Err(e) => {
-            info!("Walking filesystem: {:?}", e);
-            if let Some(cache) = build_search_cache(
-                app_handle,
-                &watch_root,
-                &ignore_paths,
-                &include_paths,
-                CancellationToken::new_scan(),
-            ) {
-                emit_status_bar_update(app_handle, cache.get_total_files(), 0, 0);
-                cache
-            } else if APP_QUIT.load(Ordering::Relaxed) {
-                info!("Walk filesystem cancelled, app quitting");
-                channels
-                    .finish_rx
-                    .recv()
-                    .expect("Failed to receive finish signal")
-                    .send(None)
-                    .expect("Failed to send None cache");
-                return;
-            } else {
-                info!("Initial scan cancelled by newer request, use noop cache");
-                SearchCache::noop(
-                    path.clone(),
-                    ignore_paths.clone(),
-                    include_paths.clone(),
-                    &APP_QUIT,
-                )
-            }
-        }
-    };
+    );
+    let event_watcher = EventWatcher::noop();
 
-    let event_watcher = if cache.is_noop() {
-        info!("Using noop event watcher due to cancelled initial scan");
-        EventWatcher::noop()
-    } else {
-        update_app_state(app_handle, AppLifecycleState::Updating);
-        EventWatcher::spawn(
-            watch_root.to_string(),
-            cache.last_event_id(),
-            FSE_LATENCY_SECS,
-            cache.ignore_paths(),
-            cache.include_paths(),
-        )
-        .1
-    };
-
-    info!("Started background processing thread");
+    info!("Started background processing thread; initial index building asynchronously");
     // TODO(ldm0): remove this watch_root, use cache's path instead
     run_background_event_loop(
         app_handle,
@@ -326,6 +292,9 @@ fn run_logic_thread(
         watch_root.to_string(),
         FSE_LATENCY_SECS,
         db_path.to_path_buf(),
+        Some(IndexingState {
+            cancellation_token: scan_cancellation_token,
+        }),
     );
 
     info!("Background thread exited");
@@ -333,8 +302,10 @@ fn run_logic_thread(
 
 fn flush_cache_to_file_once(finish_tx: &Sender<Sender<Option<SearchCache>>>, db_path: &PathBuf) {
     static FLUSH_ONCE: Once = Once::new();
-    if load_app_state() != AppLifecycleState::Ready {
-        info!("App not fully initialized, skipping cache flush");
+    // `Updating` means a complete cache exists and the watcher is replaying history; that is
+    // good enough to persist. Only `Initializing` (walk/rebuild in flight) is skipped.
+    if load_app_state() == AppLifecycleState::Initializing {
+        info!("App is still initializing, skipping cache flush");
         return;
     }
     FLUSH_ONCE.call_once(move || {

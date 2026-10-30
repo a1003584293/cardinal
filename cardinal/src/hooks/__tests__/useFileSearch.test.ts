@@ -90,6 +90,156 @@ describe('useFileSearch', () => {
     });
   });
 
+  it('reports indexing instead of waiting when the backend is still building its index', async () => {
+    mockedInvoke.mockImplementation((command: string) => {
+      if (command === 'get_app_status') {
+        return Promise.resolve('Initializing');
+      }
+      if (command === 'search') {
+        return Promise.resolve({
+          results: [],
+          highlights: [],
+          statusCode: SearchStatusCode.INDEXING,
+        });
+      }
+      return Promise.resolve(null);
+    });
+
+    const { result } = renderHook(() => useFileSearch());
+
+    await waitFor(() => expect(result.current.state.indexing).toBe(true));
+    expect(result.current.state.results).toEqual([]);
+    expect(result.current.state.showLoadingUI).toBe(false);
+    expect(result.current.state.lifecycleState).toBe('Initializing');
+  });
+
+  it('retries the current query once the index is ready', async () => {
+    const backendResults = [7] as SlabIndex[];
+    let searchCalls = 0;
+    mockedInvoke.mockImplementation((command: string) => {
+      if (command === 'get_app_status') {
+        return Promise.resolve('Initializing');
+      }
+      if (command === 'search') {
+        searchCalls += 1;
+        return Promise.resolve(
+          searchCalls === 1
+            ? { results: [], highlights: [], statusCode: SearchStatusCode.INDEXING }
+            : searchResponse(backendResults),
+        );
+      }
+      return Promise.resolve(null);
+    });
+
+    const { result } = renderHook(() => useFileSearch());
+    await waitFor(() => expect(result.current.state.indexing).toBe(true));
+
+    act(() => {
+      result.current.setLifecycleState('Updating');
+    });
+
+    await waitFor(() => expect(result.current.state.results).toEqual(backendResults));
+    expect(result.current.state.indexing).toBe(false);
+    expect(searchCalls).toBeGreaterThanOrEqual(2);
+  });
+
+  it('re-runs the query when a temporary folder-scope result set is replaced by the real index', async () => {
+    // Slab indices are owned by the cache that produced them, so results answered from the
+    // temporary scope index must be refreshed once the full index is installed.
+    const scopedResults = [1] as SlabIndex[];
+    const fullResults = [9] as SlabIndex[];
+    let searchCalls = 0;
+    mockedInvoke.mockImplementation((command: string) => {
+      if (command === 'get_app_status') {
+        return Promise.resolve('Initializing');
+      }
+      if (command === 'search') {
+        searchCalls += 1;
+        return Promise.resolve(searchResponse(searchCalls === 1 ? scopedResults : fullResults));
+      }
+      return Promise.resolve(null);
+    });
+
+    const { result } = renderHook(() => useFileSearch());
+    await waitFor(() => expect(result.current.state.results).toEqual(scopedResults));
+
+    act(() => {
+      result.current.setLifecycleState('Updating');
+    });
+
+    await waitFor(() => expect(result.current.state.results).toEqual(fullResults));
+  });
+
+  it('polls until the temporary folder-scope index is ready', async () => {
+    const backendResults = [42] as SlabIndex[];
+    let searchCalls = 0;
+    mockedInvoke.mockImplementation((command: string) => {
+      if (command === 'get_app_status') {
+        return Promise.resolve('Initializing');
+      }
+      if (command === 'search') {
+        searchCalls += 1;
+        return Promise.resolve(
+          searchCalls === 1
+            ? {
+                results: [],
+                highlights: [],
+                statusCode: SearchStatusCode.SCOPED_INDEXING,
+                scope: '/Volumes/nfs_D',
+              }
+            : searchResponse(backendResults),
+        );
+      }
+      return Promise.resolve(null);
+    });
+
+    const { result } = renderHook(() => useFileSearch());
+    await waitFor(() => expect(result.current.state.indexingScope).toBe('/Volumes/nfs_D'));
+    expect(result.current.state.indexing).toBe(true);
+
+    // The 800 ms poll retries the same query until the scoped walk finishes.
+    await waitFor(() => expect(result.current.state.results).toEqual(backendResults), {
+      timeout: 4000,
+    });
+    expect(result.current.state.indexing).toBe(false);
+    expect(result.current.state.indexingScope).toBeNull();
+    expect(searchCalls).toBeGreaterThanOrEqual(2);
+  });
+
+  it('keeps polling while the scope index is still building (more than one retry)', async () => {
+    // Regression: the reducer used to return the identical state object on retries, so the
+    // poll effect's dependencies never changed and polling stopped after a single retry.
+    const backendResults = [43] as SlabIndex[];
+    let searchCalls = 0;
+    mockedInvoke.mockImplementation((command: string) => {
+      if (command === 'get_app_status') {
+        return Promise.resolve('Initializing');
+      }
+      if (command === 'search') {
+        searchCalls += 1;
+        return Promise.resolve(
+          searchCalls < 4
+            ? {
+                results: [],
+                highlights: [],
+                statusCode: SearchStatusCode.SCOPED_INDEXING,
+                scope: '/Volumes/nfs_D',
+              }
+            : searchResponse(backendResults),
+        );
+      }
+      return Promise.resolve(null);
+    });
+
+    const { result } = renderHook(() => useFileSearch());
+    await waitFor(() => expect(result.current.state.indexingScope).toBe('/Volumes/nfs_D'));
+
+    await waitFor(() => expect(result.current.state.results).toEqual(backendResults), {
+      timeout: 6000,
+    });
+    expect(searchCalls).toBeGreaterThanOrEqual(4);
+  });
+
   it('does not send directory scope while the scope input is inactive', async () => {
     mockSearchSuccess();
     const { result } = await renderReadySearchHook();

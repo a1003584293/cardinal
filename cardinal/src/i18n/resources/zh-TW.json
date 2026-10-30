@@ -28,6 +28,11 @@
   },
   "stateDisplay": {
     "loading": "正在搜尋…",
+    "indexingTitle": "正在建立檔案索引…",
+    "indexingMessage": "首次啟動可能需要一些時間。想立即搜尋，可在資料夾範圍中輸入完整路徑（例如 ~/Documents）。",
+    "indexingProgress": "已掃描 {{formatted}} 個檔案。想立即搜尋，可在資料夾範圍中輸入完整路徑（例如 ~/Documents）。",
+    "scopeIndexingTitle": "正在索引所選資料夾…",
+    "scopeIndexingMessage": "已在 {{scope}} 中掃描 {{formatted}} 個項目，索引完成後會自動顯示結果。",
     "error": "搜尋發生錯誤",
     "emptyTitle": "「{{query}}」沒有符合結果",
     "emptyMessage": "試著調整關鍵字或篩選條件。",

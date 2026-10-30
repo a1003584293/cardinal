@@ -50,12 +50,26 @@ impl From<SearchOptionsPayload> for SearchOptions {
     }
 }
 
+/// Result of a search job handled by the background loop.
+#[derive(Debug)]
+pub enum SearchJobResult {
+    Completed(Result<SearchOutcome>),
+    /// The index is still being built and the query has no filesystem scope that can be
+    /// answered right away. The frontend uses this to show progress instead of waiting.
+    Indexing,
+    /// A temporary index for this folder scope is being built; the frontend shows the scope
+    /// and retries shortly.
+    ScopedIndexing {
+        scope: String,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub struct SearchJob {
     pub query: SearchQuery,
     pub options: SearchOptionsPayload,
     pub cancellation_token: CancellationToken,
-    pub result_tx: Sender<Result<SearchOutcome>>,
+    pub result_tx: Sender<SearchJobResult>,
 }
 
 #[derive(Debug, Clone)]
@@ -235,12 +249,19 @@ pub struct NodeInfo {
 pub struct SearchResponse {
     pub results: Vec<SlabIndex>,
     pub highlights: Vec<String>,
+    /// Folder scope being indexed, when `status_code` is `SCOPED_INDEXING`.
+    pub scope: Option<String>,
     pub status_code: u8,
 }
 
 impl SearchResponse {
     pub const OK: u8 = 0;
     pub const CANCELLED: u8 = 1;
+    /// The index is being built; the request was not evaluated. The UI should show progress
+    /// and retry automatically once the lifecycle reaches `Updating`/`Ready`.
+    pub const INDEXING: u8 = 2;
+    /// A temporary index for the requested folder scope is being built.
+    pub const SCOPED_INDEXING: u8 = 3;
 }
 
 #[derive(Serialize)]
@@ -318,28 +339,41 @@ pub async fn search(
     }
 
     match result_rx.recv() {
-        Ok(res) => res,
+        Ok(SearchJobResult::Indexing) => Ok(SearchResponse {
+            results: vec![],
+            highlights: vec![],
+            scope: None,
+            status_code: SearchResponse::INDEXING,
+        }),
+        Ok(SearchJobResult::ScopedIndexing { scope }) => Ok(SearchResponse {
+            results: vec![],
+            highlights: vec![],
+            scope: Some(scope),
+            status_code: SearchResponse::SCOPED_INDEXING,
+        }),
+        Ok(SearchJobResult::Completed(res)) => res
+            .map(|SearchOutcome { nodes, highlights }| {
+                let (status_code, results) = match nodes {
+                    Some(list) => (SearchResponse::OK, list),
+                    None => {
+                        let version = cancellation_token.version();
+                        info!("Search {version} was cancelled");
+                        (SearchResponse::CANCELLED, vec![])
+                    }
+                };
+                SearchResponse {
+                    results,
+                    highlights,
+                    scope: None,
+                    status_code,
+                }
+            })
+            .map_err(|e| format!("Failed to process search result: {e:?}")),
         Err(e) => {
             error!("Failed to receive search result: {e:?}");
-            return Err(format!("Failed to receive search result: {e:?}"));
+            Err(format!("Failed to receive search result: {e:?}"))
         }
     }
-    .map(|SearchOutcome { nodes, highlights }| {
-        let (status_code, results) = match nodes {
-            Some(list) => (SearchResponse::OK, list),
-            None => {
-                let version = cancellation_token.version();
-                info!("Search {version} was cancelled");
-                (SearchResponse::CANCELLED, vec![])
-            }
-        };
-        SearchResponse {
-            results,
-            highlights,
-            status_code,
-        }
-    })
-    .map_err(|e| format!("Failed to process search result: {e:?}"))
 }
 
 #[tauri::command(async)]

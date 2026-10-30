@@ -38,6 +38,8 @@ export const SCROLLBAR_THUMB_MIN = 24;
 // Cache and performance tuning
 export const CACHE_SIZE = 1000;
 export const SEARCH_DEBOUNCE_MS = 300;
+/** How often a search is retried while a temporary folder-scope index is being built. */
+export const SCOPE_INDEX_POLL_MS = 800;
 export const STATUS_FADE_DELAY_MS = 2000;
 export const OVERSCAN_ROW_COUNT = 1;
 

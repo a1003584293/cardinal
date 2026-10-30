@@ -28,6 +28,11 @@
   },
   "stateDisplay": {
     "loading": "Searching...",
+    "indexingTitle": "Building the file index...",
+    "indexingMessage": "This can take a while on the first launch. To search right away, enter a full folder path (for example ~/Documents) in the folder scope box.",
+    "indexingProgress": "{{formatted}} files scanned. To search right away, enter a full folder path (for example ~/Documents) in the folder scope box.",
+    "scopeIndexingTitle": "Indexing the selected folder...",
+    "scopeIndexingMessage": "Scanned {{formatted}} entries in {{scope}}. Results appear here as soon as this folder is indexed.",
     "error": "Search Error",
     "emptyTitle": "No results for \"{{query}}\"",
     "emptyMessage": "Try adjusting your keywords or filters.",

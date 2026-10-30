@@ -18,7 +18,10 @@ type FilesTabContentProps = {
   onResizeStart: (columnKey: ColumnKey) => (event: ReactMouseEvent<HTMLSpanElement>) => void;
   onHeaderContextMenu: (event: ReactMouseEvent<HTMLDivElement>) => void;
   displayState: DisplayState;
-  searchErrorMessage: string | null;
+  /** Message shown by the loading/indexing/error panels. */
+  stateMessage: string | null;
+  /** Title override for the indexing panel (names the folder being indexed). */
+  stateTitle: string | null;
   currentQuery: string;
   currentDirectoryQuery: string;
   resultsViewRef: React.Ref<ResultsViewHandle>;
@@ -55,7 +58,8 @@ export function FilesTabContent({
   onResizeStart,
   onHeaderContextMenu,
   displayState,
-  searchErrorMessage,
+  stateMessage,
+  stateTitle,
   currentQuery,
   currentDirectoryQuery,
   resultsViewRef,
@@ -92,7 +96,8 @@ export function FilesTabContent({
         {displayState !== 'results' ? (
           <StateDisplay
             state={displayState}
-            message={searchErrorMessage}
+            message={stateMessage}
+            title={stateTitle}
             query={currentQuery}
             directoryQuery={currentDirectoryQuery}
           />
