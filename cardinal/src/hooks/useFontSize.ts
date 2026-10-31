@@ -1,5 +1,6 @@
 import { useCallback, useEffect } from 'react';
 import { useStoredState } from './useStoredState';
+import { broadcastUiPreferencesChanged } from '../runtime/uiPreferences';
 import {
   FONT_SIZE_DEFAULT,
   clampFontSize,
@@ -7,7 +8,7 @@ import {
   type FontSizeSettings,
 } from '../types/fontSize';
 
-const STORAGE_KEY = 'cardinal.fontSize.v1';
+export const FONT_SIZE_STORAGE_KEY = 'cardinal.fontSize.v1';
 
 const readFontSize = (raw: string): FontSizeSettings | null => {
   const parsed = Number.parseFloat(raw);
@@ -32,7 +33,7 @@ export type FontSizeController = {
  */
 export function useFontSize(): FontSizeController {
   const [settings, setSettings] = useStoredState<FontSizeSettings>({
-    key: STORAGE_KEY,
+    key: FONT_SIZE_STORAGE_KEY,
     defaultValue: { base: FONT_SIZE_DEFAULT },
     read: readFontSize,
     write: writeFontSize,
@@ -46,6 +47,8 @@ export function useFontSize(): FontSizeController {
       return;
     }
     document.documentElement.style.setProperty('--app-font-size', `${settings.base}px`);
+    // The bookmarks window sizes everything in `rem` too, so it needs the same value.
+    broadcastUiPreferencesChanged();
   }, [settings.base]);
 
   const setFontSize = useCallback(

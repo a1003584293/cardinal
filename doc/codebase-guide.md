@@ -232,7 +232,17 @@ cargo fmt --all
     - 图片/视频扩展名（`IMAGE_EXTENSIONS` / `VIDEO_EXTENSIONS`）→ QuickLook 封面图
     - 其它（含目录）→ `NSWorkspace` 应用图标
     - **提速靠缓存不是靠前端**：`APP_ICON_CACHE` 按 `扩展名@尺寸` 缓存位图，500 个 `.html` 只付 1 次 LaunchServices 查询
+16.5. **书签面板是独立窗口（不是 DOM 浮层）**：`Cmd+Shift+B` 现在调 `toggle_bookmarks_window`，由 `cardinal/src-tauri/src/bookmarks_window.rs` 用 `WebviewWindowBuilder` 创建 label 为 `bookmarks` 的无边框窗口，URL 是 `index.html?window=bookmarks`
+    - `main.tsx` 按 `?window=` 分流：书签窗口只渲染 `BookmarksWindow`，**不初始化菜单/全局快捷键/事件运行时**
+    - 拖拽用 Tauri 的 `startDragging()`（`utils/windowDrag.ts`），不能用 CSS 拖动 —— DOM 无法移出 webview 边界
+    - 窗口位置交给 `window-state` 插件持久化，恢复后由 `ensure_on_screen` 纠偏
+    - 两个窗口共享同一份 localStorage，但**不共享 React state**：`useStoredState` 新增 `syncEvent`，`useBookmarks` 每次写入后 `emit(BOOKMARKS_CHANGED_EVENT)`，另一边监听后重读
+    - 在书签窗口点"搜索"不会自己搜，而是 `emitTo('main', BOOKMARK_OPEN_EVENT)` 交给主窗口执行；主窗口用 `useBookmarkOpenListener` 订阅（**必须**用 `useStableEvent` 包一层：`listen()` 是异步的，effect 若随每次 render 重跑，旧订阅永远清不掉，一次点击会开出 N 个 tab）
+    - 主窗口隐藏（Esc/托盘/关闭）时会一并隐藏书签窗口，避免它孤零零留在屏幕上
+    - **UI 偏好要跨窗口广播**：主题/字号/语言都写在各自 document 上，`storage` 事件不跨 webview 触发，所以 `runtime/uiPreferences.ts` 用 `UI_PREFERENCES_CHANGED_EVENT` 广播，两边启动时 `applyStoredUiPreferences()` + `subscribeUiPreferencesChanged()`。漏了这一步的表现是"主窗口变深色，书签窗口要重启才变"
+    - 该模块**故意不 import `i18n/config`**（会拉进 `initReactI18next`，让 App 的单测挂掉）；语言通过 `onAfterApply` 回调交给 `main.tsx` 处理
 17. **书签面板改为非模态浮层**：`position: fixed; top/right/bottom`，容器 `pointer-events: none`、卡片 `auto`，`main` 不再 `aria-hidden`。这样连续右键「在新标签页搜索」能立刻看到新 tab，而不是以为没生效
+17.5. **监听器必须只订阅一次**：Tauri 的 `listen()` 返回 Promise，所以 `useEffect` 里 `let unlisten; listen().then(fn => unlisten = fn); return () => unlisten?.()` 这个写法**只要 deps 变化就会泄漏**（cleanup 跑的时候 `unlisten` 还是 undefined）。修复模式见 `useBookmarkOpenListener`：`useStableEvent` 包 handler + `cancelled` 标志，late resolve 时自己 `fn()` 退订
 18. **tab 过滤器隔离**：`createTab` / `activateTab` 的 `setState` 尚未提交时调用 `setActiveTabFilter` 会写到**上一个** active tab。因此：
     - 打开书签/切换 tab 只调用 `selectFilterPreset`（只更新下拉），过滤器随 tab 一起由 `createTab(query, filter)` 带上，或用 `queueSearchWithFilter` 直接驱动搜索
     - 需要改当前 tab 过滤器时（用户操作下拉）才用 `setActiveTabFilter`
@@ -255,6 +265,11 @@ cargo fmt --all
 27. **启动卡死的两个真实根因**（都修了）：
     - `start_logic` 若在 `LOGIC_START` 初始化前到达会被静默丢弃，而前端已把 `logicStartedRef` 置位 → 后台线程永远停在 "Waiting for Full Disk Access signal"。现在早到的请求存入 `PENDING_LOGIC_START`，`wait_for_logic_start` 先取它；前端在 `invoke` 失败时清除 latch 以便重试
     - `most_recent_nodes` 曾对全盘每个节点 `stat`（380 万文件 ≈ 数分钟，把搜索线程堵死）。现在限制为 `RECENT_SCAN_LIMIT(20000)` + `RECENT_STAT_BUDGET_MS(60)` 预算，并用 `take_indices` 避免先物化整个索引。实测 release：缓存加载 2.4s、最近列表 60ms
+27.5. **窗口重开落在错误的桌面（Space）**：macOS 默认把隐藏窗口重新 `orderFront` 到它上次所在的 Space，所以在桌面 2 隐藏、到桌面 1 点 Dock，会被强行拉回桌面 2
+    - 修复：`prefer_active_space()` 给窗口 OR 上 `NSWindowCollectionBehavior::MoveToActiveSpace`。AppKit 只在**窗口不可见时** `orderFront` 才认这个标志，所以必须在 `show()` **之前**设置
+    - tao 的 `applicationShouldHandleReopen` 返回 `hasVisibleWindows`，隐藏时返回 `NO`，AppKit 不会抢先显示窗口，因此我们的 `show()` 是第一次 orderFront，标志生效
+    - 启动时也在 `.setup()` 里设一次，让窗口从创建起就带着该行为；书签窗口（`bookmarks_window.rs`）同样处理
+    - 已可见但停在别的 Space 时点 Dock 仍然是系统默认的"切过去"行为，这是 macOS 全局约定，没有改
 28. **窗口恢复越界**：window-state 插件可能恢复出屏幕外的坐标（如 `y:1105` 而屏幕高 1080），表现为"软件启动了但看不到窗口"。`activate_window` 新增 `ensure_on_screen`，窗口与所有显示器都不相交时移回主屏左上角
 
 ### 第八轮（面板缩放 / tab 间距 / 选中项信息 / 首页懒加载）
@@ -335,6 +350,7 @@ cargo fmt --all
 | 搜索筛选器（下拉/配置/导入导出） | `useSearchFilters.ts` + `FiltersOverlay.tsx` + `types/searchFilters.ts` |
 | CSV 导入导出 | `utils/csv.ts` + `utils/fileTransfer.ts` + 后端 `write_text_file`/`read_text_file` |
 | 全局字号 | `useFontSize.ts` + `--app-font-size`（App.css 全部用 rem） |
+| 书签独立窗口（创建/拖动/跨窗口同步） | `src-tauri/src/bookmarks_window.rs` + `BookmarksWindow.tsx` + `useStoredState` 的 `syncEvent` |
 | 书签（过滤器/默认分类/Cmd+S） | `useBookmarks.ts` + `BookmarksOverlay.tsx` + `types/bookmarks.ts` |
 | Cmd+S 保存书签 | `useAppHotkeys.ts` + `App.tsx` 的 `handleSaveCurrentSearchAsBookmark` |
 | `ext:` / `folder:` 语法 | `cardinal-syntax`（解析）+ `search-cache/src/query.rs`（求值） |
@@ -346,6 +362,7 @@ cargo fmt --all
 | 完全磁盘访问授权/免重启 | `useFullDiskAccessPermission.ts`（轮询）+ `PermissionOverlay.tsx` |
 | 启动闸门（何时开始索引） | `useAppPreferences.ts` 的 logic gate + 后端 `LOGIC_START` / `PENDING_LOGIC_START` |
 | 窗口显示/位置校正 | `window_controls.rs` 的 `activate_window` / `ensure_on_screen` |
+| 窗口出现在当前桌面（Space） | `window_controls.rs` 的 `prefer_active_space`（`NSWindowCollectionBehavior::MoveToActiveSpace`） |
 | 书签面板拖动/缩放 | `usePanelDrag.ts`（位置 + 尺寸持久化） |
 | 首页懒加载分页 | `background.rs` 的 `RECENT_SNAPSHOT_SIZE` + `get_recent_nodes` + `SEARCH_APPEND` |
 | 文件大小/时间格式化 | `utils/format.ts` 的 `formatSize` / `formatTimestamp` |

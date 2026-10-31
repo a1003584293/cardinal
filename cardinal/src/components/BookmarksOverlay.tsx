@@ -4,6 +4,7 @@ import type { Bookmark, BookmarkOpenMode } from '../types/bookmarks';
 import type { BookmarksController } from '../hooks/useBookmarks';
 import { exportTextFile, importTextFile } from '../utils/fileTransfer';
 import { usePanelDrag, type ResizeHandleName } from '../hooks/usePanelDrag';
+import { startNativeWindowDrag } from '../utils/windowDrag';
 
 type BookmarksOverlayProps = {
   open: boolean;
@@ -12,6 +13,11 @@ type BookmarksOverlayProps = {
   onOpenBookmark: (bookmark: Bookmark, mode: BookmarkOpenMode) => void;
   /** Filter presets offered in the bookmark editor, identified by their search text. */
   filterOptions: { id: string; label: string; search?: string }[];
+  /**
+   * `window` renders the manager as the content of its own OS window: the panel fills the
+   * viewport, the header drags the native window and there is no in-app positioning.
+   */
+  variant?: 'overlay' | 'window';
 };
 
 type BookmarkDraft = {
@@ -55,6 +61,7 @@ export function BookmarksOverlay({
   controller,
   onOpenBookmark,
   filterOptions,
+  variant = 'overlay',
 }: BookmarksOverlayProps): React.JSX.Element | null {
   const { t } = useTranslation();
   const {
@@ -240,33 +247,61 @@ export function BookmarksOverlay({
     onOpenBookmark(bookmark, mode);
   };
 
+  const isWindow = variant === 'window';
+
   return (
-    // Non-modal floating panel: it must not cover the results area, otherwise opening several
-    // bookmarks in new tabs looks like nothing happened until the panel is dismissed.
-    <div className="bookmarks-overlay" role="dialog" aria-label={t('bookmarks.title')}>
+    // In `overlay` mode this is a non-modal floating panel inside the app. In `window` mode it
+    // fills its own OS window, which can be dragged anywhere on screen.
+    <div
+      className={`bookmarks-overlay${isWindow ? ' bookmarks-overlay--window' : ''}`}
+      role="dialog"
+      aria-label={t('bookmarks.title')}
+    >
       <div
         ref={cardRef}
-        className={`bookmarks-card${position ? ' is-floating' : ''}${size ? ' is-resized' : ''}`}
-        style={{
-          ...(position ? { left: position.x, top: position.y, right: 'auto', bottom: 'auto' } : {}),
-          ...(size ? { width: size.width, height: size.height } : {}),
-        }}
+        className={`bookmarks-card${!isWindow && position ? ' is-floating' : ''}${
+          !isWindow && size ? ' is-resized' : ''
+        }${isWindow ? ' is-window' : ''}`}
+        style={
+          isWindow
+            ? undefined
+            : {
+                ...(position
+                  ? { left: position.x, top: position.y, right: 'auto', bottom: 'auto' }
+                  : {}),
+                ...(size ? { width: size.width, height: size.height } : {}),
+              }
+        }
       >
-        {/* Eight handles: four edges plus four corners (a corner adjusts both edges). */}
-        {RESIZE_HANDLES.map(({ name, labelKey, orientation }) => (
-          <div
-            key={name}
-            className={`bookmarks-resize-handle bookmarks-resize-handle--${name}`}
-            role="separator"
-            aria-orientation={orientation}
-            aria-label={t(labelKey)}
-            {...resizeHandleProps(name)}
-          />
-        ))}
+        {/* Eight handles: four edges plus four corners (a corner adjusts both edges).
+            A native window is resized by the OS, so they are overlay-only. */}
+        {isWindow
+          ? null
+          : RESIZE_HANDLES.map(({ name, labelKey, orientation }) => (
+              <div
+                key={name}
+                className={`bookmarks-resize-handle bookmarks-resize-handle--${name}`}
+                role="separator"
+                aria-orientation={orientation}
+                aria-label={t(labelKey)}
+                {...resizeHandleProps(name)}
+              />
+            ))}
         <header
           className="bookmarks-card__header is-drag-handle"
           title={t('bookmarks.dragHint')}
-          {...dragHandleProps}
+          {...(isWindow
+            ? {
+                onMouseDown: (event: React.MouseEvent<HTMLElement>) => {
+                  // Buttons in the header keep their own behaviour.
+                  if ((event.target as HTMLElement).closest('button, input, select')) {
+                    return;
+                  }
+                  event.preventDefault();
+                  void startNativeWindowDrag();
+                },
+              }
+            : dragHandleProps)}
         >
           <h1 className="bookmarks-card__title">{t('bookmarks.title')}</h1>
           <div className="bookmarks-card__actions">

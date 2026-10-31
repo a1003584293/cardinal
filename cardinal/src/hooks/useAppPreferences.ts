@@ -4,6 +4,7 @@ import type { i18n as I18nInstance } from 'i18next';
 import { OPEN_PREFERENCES_EVENT } from '../constants/appEvents';
 import { getBrowserLanguage } from '../i18n/config';
 import { applyThemePreference, persistThemePreference } from '../theme';
+import { broadcastUiPreferencesChanged } from '../runtime/uiPreferences';
 import { setTrayEnabled } from '../tray';
 import { getStoredTrayIconEnabled, persistTrayIconEnabled } from '../trayIconPreference';
 import { setWatchConfig } from '../utils/watchConfig';
@@ -147,6 +148,7 @@ export function useAppPreferences({
     setTrayIconEnabled(false);
     persistThemePreference('system');
     applyThemePreference('system');
+    broadcastUiPreferencesChanged();
     const nextLanguage = getBrowserLanguage();
     void i18n.changeLanguage(nextLanguage);
     setPreferencesResetToken((token) => token + 1);

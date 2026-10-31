@@ -1,6 +1,11 @@
 # Changelog
 
 ## Unreleased
+- Reopening a hidden window (Dock click, tray, Cmd+Shift+Space) now shows it on the Desktop you are currently on instead of yanking you back to the Desktop where it was last visible.
+- Bookmarks window follows the theme, font size and language immediately: UI preferences are now broadcast between the two windows instead of only being read when a window boots.
+- The bookmarks manager (Cmd+Shift+B) is now its own window: drag it anywhere on screen, including outside the Cardinal window, so it no longer covers the result list.
+- Bookmarks changed in one window (Cmd+S, CSV import) appear immediately in the other.
+- Fix: "search in new tab" opened one tab per re-render. The bookmark-open effect depended on a callback that `useSearchTabs` rebuilt every render, and because `listen()` resolves asynchronously the cleanup could not unsubscribe — each render leaked a listener.
 - Folder scope is now per search tab: typing a scope in one tab no longer narrows every other tab (including tabs opened from a bookmark).
 - Tiled view fills each name line greedily: a name like `白咲碧122614_0...` used to leave `白咲碧` alone on line 1 because `overflow-wrap: anywhere` moves a whole word down before splitting it.
 - Fix imported bookmark lists collapsing into 2px lines: rows are flex items inside a scroll container, so `overflow: hidden` zeroed their automatic minimum size and let them shrink.

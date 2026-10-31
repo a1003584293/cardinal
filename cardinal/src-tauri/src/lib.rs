@@ -1,4 +1,5 @@
 mod background;
+mod bookmarks_window;
 mod commands;
 mod lifecycle;
 mod quicklook;
@@ -11,6 +12,7 @@ use background::{
     BackgroundLoopChannels, IconPayload, IconViewportUpdate, IndexBuildResult, IndexingState,
     ScopedIndexResult, run_background_event_loop, spawn_index_load,
 };
+use bookmarks_window::{hide_bookmarks_window, show_bookmarks_window, toggle_bookmarks_window};
 use cardinal_sdk::EventWatcher;
 use commands::{
     NodeInfoRequest, RecentNodesRequest, SearchJob, SearchState, WatchConfigUpdate,
@@ -114,6 +116,14 @@ pub fn run() -> Result<()> {
                     };
 
                     if hide_window(&window) {
+                        // The bookmarks panel is its own window; never leave it floating
+                        // over other apps after the main window is gone.
+                        if let Some(bookmarks) = window
+                            .app_handle()
+                            .get_webview_window(bookmarks_window::BOOKMARKS_WINDOW_LABEL)
+                        {
+                            let _ = bookmarks.hide();
+                        }
                         let _ = update_window_state_tx_for_window.try_send(());
                         info!("Main window hidden; Cardinal keeps running in the background");
                     }
@@ -132,6 +142,14 @@ pub fn run() -> Result<()> {
             watch_config_tx.clone(),
             update_window_state_tx.clone(),
         ))
+        // Set from the start, not only before each show: that way any path that orders the
+        // window front from a hidden state lands the user on the Desktop they are looking at.
+        .setup(|app| {
+            if let Some(window) = app.get_webview_window("main") {
+                window_controls::prefer_active_space(&window);
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             search,
             get_nodes_info,
@@ -154,6 +172,9 @@ pub fn run() -> Result<()> {
             toggle_main_window,
             set_tray_activation_policy,
             copy_files_to_clipboard,
+            show_bookmarks_window,
+            hide_bookmarks_window,
+            toggle_bookmarks_window,
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application");

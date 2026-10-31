@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 
 export type SearchTab = {
   id: string;
@@ -105,15 +105,31 @@ export function useSearchTabs(): SearchTabsController {
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0];
 
-  return {
-    tabs,
-    activeTabId,
-    activeTab,
-    createTab,
-    closeTab,
-    activateTab,
-    setActiveTabQuery,
-    setActiveTabFilter,
-    setActiveTabDirectory,
-  };
+  // Memoised so consumers can use this object in dependency arrays. Returning a fresh literal
+  // every render made every callback that depends on it unstable, which caused listeners to be
+  // re-registered on every render (see the bookmark-open handler in App).
+  return useMemo(
+    () => ({
+      tabs,
+      activeTabId,
+      activeTab,
+      createTab,
+      closeTab,
+      activateTab,
+      setActiveTabQuery,
+      setActiveTabFilter,
+      setActiveTabDirectory,
+    }),
+    [
+      tabs,
+      activeTabId,
+      activeTab,
+      createTab,
+      closeTab,
+      activateTab,
+      setActiveTabQuery,
+      setActiveTabFilter,
+      setActiveTabDirectory,
+    ],
+  );
 }

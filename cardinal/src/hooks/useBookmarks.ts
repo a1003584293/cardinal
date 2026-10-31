@@ -1,5 +1,7 @@
-import { useCallback } from 'react';
+import { useCallback, useEffect } from 'react';
+import { emit } from '@tauri-apps/api/event';
 import { useStoredState } from './useStoredState';
+import { BOOKMARKS_CHANGED_EVENT } from '../constants/appEvents';
 import { decodeCsv, encodeCsv } from '../utils/csv';
 import {
   DEFAULT_BOOKMARK_CATEGORY_ID,
@@ -115,6 +117,9 @@ export type BookmarksController = {
 export function useBookmarks(): BookmarksController {
   const [state, setState] = useStoredState<BookmarksState>({
     key: BOOKMARKS_STORAGE_KEY,
+    // Bookmarks live in localStorage, which both windows share. The event keeps the separate
+    // bookmarks window in sync with Cmd+S saves and imports done in the main window.
+    syncEvent: BOOKMARKS_CHANGED_EVENT,
     defaultValue: defaultState(),
     read: readBookmarks,
     write: writeBookmarks,
@@ -125,6 +130,25 @@ export function useBookmarks(): BookmarksController {
 
   const { categories, bookmarks } = state;
 
+  /**
+   * Writes the bookmarks and tells the other window (the bookmarks manager lives in its own
+   * OS window) to re-read localStorage. Without the broadcast, a Cmd+S save in the main window
+   * would stay invisible in the manager until it was reopened.
+   */
+  const mutate = useCallback(
+    (updater: (prev: BookmarksState) => BookmarksState) => {
+      setState(updater);
+      try {
+        void Promise.resolve(emit(BOOKMARKS_CHANGED_EVENT)).catch(() => {
+          // No Tauri IPC (unit tests, plain browser): nothing to broadcast to.
+        });
+      } catch {
+        // Broadcasting is best-effort; the local write already happened.
+      }
+    },
+    [setState],
+  );
+
   const addCategory = useCallback(
     (name: string): string | null => {
       const trimmed = name.trim();
@@ -132,13 +156,13 @@ export function useBookmarks(): BookmarksController {
         return null;
       }
       const id = createId();
-      setState((prev) => ({
+      mutate((prev) => ({
         ...prev,
         categories: [...prev.categories, { id, name: trimmed }],
       }));
       return id;
     },
-    [setState],
+    [mutate],
   );
 
   const renameCategory = useCallback(
@@ -147,14 +171,14 @@ export function useBookmarks(): BookmarksController {
       if (!trimmed || isDefaultCategory(categoryId)) {
         return;
       }
-      setState((prev) => ({
+      mutate((prev) => ({
         ...prev,
         categories: prev.categories.map((category) =>
           category.id === categoryId ? { ...category, name: trimmed } : category,
         ),
       }));
     },
-    [setState],
+    [mutate],
   );
 
   const deleteCategory = useCallback(
@@ -163,13 +187,13 @@ export function useBookmarks(): BookmarksController {
       if (isDefaultCategory(categoryId)) {
         return;
       }
-      setState((prev) => ({
+      mutate((prev) => ({
         ...prev,
         categories: prev.categories.filter((category) => category.id !== categoryId),
         bookmarks: prev.bookmarks.filter((bookmark) => bookmark.categoryId !== categoryId),
       }));
     },
-    [setState],
+    [mutate],
   );
 
   const addBookmark = useCallback(
@@ -187,7 +211,7 @@ export function useBookmarks(): BookmarksController {
       if (!trimmedQuery) {
         trimmedQuery = trimmedName;
       }
-      setState((prev) => ({
+      mutate((prev) => ({
         ...prev,
         bookmarks: [
           ...prev.bookmarks,
@@ -201,7 +225,7 @@ export function useBookmarks(): BookmarksController {
         ],
       }));
     },
-    [setState],
+    [mutate],
   );
 
   const updateBookmark = useCallback(
@@ -217,7 +241,7 @@ export function useBookmarks(): BookmarksController {
       if (!trimmedQuery) {
         trimmedQuery = trimmedName;
       }
-      setState((prev) => ({
+      mutate((prev) => ({
         ...prev,
         bookmarks: prev.bookmarks.map((bookmark) =>
           bookmark.id === bookmarkId
@@ -231,22 +255,22 @@ export function useBookmarks(): BookmarksController {
         ),
       }));
     },
-    [setState],
+    [mutate],
   );
 
   const deleteBookmark = useCallback(
     (bookmarkId: string) => {
-      setState((prev) => ({
+      mutate((prev) => ({
         ...prev,
         bookmarks: prev.bookmarks.filter((bookmark) => bookmark.id !== bookmarkId),
       }));
     },
-    [setState],
+    [mutate],
   );
 
   const moveBookmark = useCallback(
     (bookmarkId: string, direction: -1 | 1) => {
-      setState((prev) => {
+      mutate((prev) => {
         const target = prev.bookmarks.find((bookmark) => bookmark.id === bookmarkId);
         if (!target) {
           return prev;
@@ -275,7 +299,7 @@ export function useBookmarks(): BookmarksController {
         };
       });
     },
-    [setState],
+    [mutate],
   );
 
   const exportCsv = useCallback((): string => {
@@ -317,7 +341,7 @@ export function useBookmarks(): BookmarksController {
       let addedCategories = 0;
       let addedBookmarks = 0;
 
-      setState((prev) => {
+      mutate((prev) => {
         const categories = [...prev.categories];
         const bookmarks = [...prev.bookmarks];
         const byName = new Map(categories.map((category) => [category.name, category.id]));
@@ -360,7 +384,7 @@ export function useBookmarks(): BookmarksController {
 
       return { categories: addedCategories, bookmarks: addedBookmarks };
     },
-    [setState],
+    [mutate],
   );
 
   return {

@@ -7,7 +7,6 @@ import { IconGrid } from './components/IconGrid';
 import type { IconSizePreset } from './components/IconGrid';
 import { IconGridItem } from './components/IconGridItem';
 import { SearchTabsBar } from './components/SearchTabsBar';
-import { BookmarksOverlay } from './components/BookmarksOverlay';
 import { SearchBar } from './components/SearchBar';
 import { FilesTabContent } from './components/FilesTabContent';
 import { PermissionOverlay } from './components/PermissionOverlay';
@@ -43,6 +42,7 @@ import { useTranslation } from 'react-i18next';
 import { useFullDiskAccessPermission } from './hooks/useFullDiskAccessPermission';
 import type { DisplayState } from './components/StateDisplay';
 import { openResultPath } from './utils/openResultPath';
+import { useBookmarkOpenListener } from './hooks/useBookmarkOpenListener';
 import { useStableEvent } from './hooks/useStableEvent';
 import { useAppHotkeys } from './hooks/useAppHotkeys';
 import { useAppPreferences } from './hooks/useAppPreferences';
@@ -103,7 +103,6 @@ function App() {
 
   const virtualListRef = useRef<ResultsViewHandle | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
-  const [isBookmarksOpen, setIsBookmarksOpen] = useState(false);
   const [isFiltersOpen, setIsFiltersOpen] = useState(false);
   const [bookmarkToast, setBookmarkToast] = useState<string | null>(null);
   const [sortMenuPoint, setSortMenuPoint] = useState<{ x: number; y: number } | null>(null);
@@ -317,7 +316,8 @@ function App() {
     clearSelection,
     navigateSelection,
     triggerQuickLook,
-    toggleBookmarks: () => setIsBookmarksOpen((open) => !open),
+    // Same native toggle as the menu item and the in-app shortcut.
+    toggleBookmarks: () => void invoke('toggle_bookmarks_window'),
     saveCurrentSearchAsBookmark: handleSaveCurrentSearchAsBookmark,
   });
 
@@ -664,11 +664,17 @@ function App() {
         return;
       }
       lastHandledAt = now;
-      setIsBookmarksOpen((current) => !current);
+      // The manager is its own OS window now, so it can be dragged anywhere on screen
+      // instead of covering the result list.
+      void invoke('toggle_bookmarks_window');
     };
     window.addEventListener(OPEN_BOOKMARKS_EVENT, open);
     return () => window.removeEventListener(OPEN_BOOKMARKS_EVENT, open);
   }, []);
+
+  // The bookmarks window asks the main window to run a search (it cannot search itself).
+  // The hook subscribes once no matter how often `openBookmark` changes identity.
+  useBookmarkOpenListener(({ bookmark, mode }) => openBookmark(bookmark, mode));
 
   const handleTabActivate = useCallback(
     (id: string) => {
@@ -972,13 +978,6 @@ function App() {
         open={isFiltersOpen}
         onClose={() => setIsFiltersOpen(false)}
         controller={searchFilters}
-      />
-      <BookmarksOverlay
-        open={isBookmarksOpen}
-        onClose={() => setIsBookmarksOpen(false)}
-        controller={bookmarks}
-        onOpenBookmark={openBookmark}
-        filterOptions={filterOptions}
       />
     </>
   );
