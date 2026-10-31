@@ -64,6 +64,11 @@
   },
   "contextMenu": {
     "openItem": "打开",
+    "openWith": "打开方式",
+    "openWithLoading": "正在查找应用程序…",
+    "openWithEmpty": "未找到可用的应用程序",
+    "openWithOther": "其他…",
+    "openWithDefault": "默认",
     "quickLook": "快速查看",
     "revealInFinder": "在 Finder 中显示",
     "copyFile": "复制文件",

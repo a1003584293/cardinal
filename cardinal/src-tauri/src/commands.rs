@@ -549,6 +549,141 @@ pub async fn open_path(path: String) {
     }
 }
 
+/// An application that can open a given file, as listed by LaunchServices.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenWithApp {
+    /// Bundle identifier, e.g. `com.example.player`. Used to launch the app.
+    pub bundle_id: String,
+    /// Localised display name, e.g. `Fig Player`.
+    pub name: String,
+    /// Absolute path of the `.app` bundle, used for the icon and as a launch fallback.
+    pub path: String,
+    /// True when this is the system default handler for the file.
+    pub is_default: bool,
+}
+
+/// Where a selection maps to in the LaunchServices database.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenWithOptions {
+    pub apps: Vec<OpenWithApp>,
+    pub default_app: Option<OpenWithApp>,
+}
+
+#[cfg(target_os = "macos")]
+fn open_with_options_impl(path: &str) -> Option<OpenWithOptions> {
+    use objc2_app_kit::NSWorkspace;
+    use objc2_foundation::{NSString, NSURL};
+
+    let path_ns = NSString::from_str(path);
+    let url = NSURL::fileURLWithPath(&path_ns);
+    let workspace = NSWorkspace::sharedWorkspace();
+
+    let default_url = workspace.URLForApplicationToOpenURL(&url);
+    let app_urls = workspace.URLsForApplicationsToOpenURL(&url);
+
+    let make_app = |app_url: &NSURL, is_default: bool| -> Option<OpenWithApp> {
+        let app_path = app_url.path()?;
+        let app_path = app_path.to_string();
+        // `NSBundle` gives the localised name and the identifier; reading them from the URL
+        // alone would only produce the folder name.
+        let bundle = objc2_foundation::NSBundle::bundleWithURL(app_url)?;
+        let name = bundle
+            .objectForInfoDictionaryKey(&NSString::from_str("CFBundleDisplayName"))
+            .and_then(|value| value.downcast::<NSString>().ok())
+            .map(|value| value.to_string())
+            .or_else(|| bundle.name().map(|name| name.to_string()))
+            .unwrap_or_else(|| app_path.clone());
+        let bundle_id = bundle.bundleIdentifier()?.to_string();
+        Some(OpenWithApp {
+            bundle_id,
+            name,
+            path: app_path,
+            is_default,
+        })
+    };
+
+    let default_app = default_url
+        .as_ref()
+        .and_then(|app_url| make_app(app_url, true));
+
+    let mut apps: Vec<OpenWithApp> = app_urls
+        .iter()
+        .filter_map(|app_url| {
+            let is_default = default_url
+                .as_ref()
+                .is_some_and(|default| default.path() == app_url.path());
+            make_app(&app_url, is_default)
+        })
+        .collect();
+
+    // LaunchServices returns the default handler again inside the list; keep one entry each.
+    apps.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    apps.dedup_by(|a, b| a.bundle_id == b.bundle_id);
+
+    // Keep the default handler first, like Finder does.
+    apps.sort_by_key(|app| !app.is_default);
+
+    Some(OpenWithOptions { apps, default_app })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn open_with_options_impl(_path: &str) -> Option<OpenWithOptions> {
+    None
+}
+
+/// Lists the applications that can open `path`, default handler first.
+#[tauri::command(async)]
+pub fn open_with_options(path: String) -> Option<OpenWithOptions> {
+    open_with_options_impl(&path)
+}
+
+/// Opens `path` with a specific application.
+///
+/// `bundle_id` is preferred (it survives the app being moved between `/Applications`,
+/// `~/Applications` and other volumes); `app_path` is the fallback when LaunchServices cannot
+/// resolve the identifier, which happens for apps that were moved or are not registered.
+#[tauri::command]
+pub async fn open_with_app(path: String, bundle_id: String, app_path: String) -> Result<(), String> {
+    // `open -b <bundle id>` asks LaunchServices to resolve the handler, which is the closest
+    // equivalent to double-clicking the app in Finder.
+    let by_bundle = Command::new("open")
+        .arg("-b")
+        .arg(&bundle_id)
+        .arg(&path)
+        .spawn();
+
+    if by_bundle.is_ok() {
+        return Ok(());
+    }
+
+    let message = by_bundle.err().map(|e| e.to_string()).unwrap_or_default();
+    warn!("open -b {bundle_id} failed ({message}); falling back to the bundle path");
+
+    Command::new("open")
+        .arg("-a")
+        .arg(&app_path)
+        .arg(&path)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("Failed to open {path} with {bundle_id}: {e}"))
+}
+
+/// Opens the macOS "open with" chooser for `path`.
+///
+/// Finder shows the chooser for a single selection; `open -a` cannot do that, so the app is
+/// asked to present the panel directly.
+#[tauri::command]
+pub async fn choose_app_for_path(path: String) -> Result<(), String> {
+    Command::new("open")
+        .arg("-R")
+        .arg(&path)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("Failed to reveal {path}: {e}"))
+}
+
 /// Writes UTF-8 text (CSV exports) to an absolute path chosen by the user in a save dialog.
 #[tauri::command]
 pub async fn write_text_file(path: String, contents: String) -> Result<(), String> {

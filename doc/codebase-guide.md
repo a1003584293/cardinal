@@ -340,6 +340,7 @@ cargo fmt --all
 | 行数据/图标懒加载 | `useDataLoader.ts` + `useIconViewport.ts` |
 | 快捷键 | `useAppHotkeys.ts`（应用内）/ `utils/globalShortcuts.ts`（全局） |
 | 右键菜单 | `useContextMenu.ts` |
+| 右键「打开方式」 | `useContextMenu.ts` 的 `context_menu.open_with` + `OpenWithMenu.tsx` + 后端 `open_with_options` / `open_with_app` |
 | 应用菜单栏 | `menu.ts` |
 | 偏好设置 | `PreferencesOverlay.tsx` + `useAppPreferences.ts` |
 | 后端命令/IPC | `src-tauri/src/commands.rs` + `lib.rs` 的 invoke_handler |

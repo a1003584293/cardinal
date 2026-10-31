@@ -3267,3 +3267,64 @@ button:active:not(:disabled) {
   color: var(--color-text);
   font-variant-numeric: tabular-nums;
 }
+
+/* === Open With submenu === */
+/* The native context menu has no submenu support, so "Open With" opens this HTML popup at the
+   right-click position. Mirrors `.sort-menu` so both popups look the same. */
+.open-with-menu {
+  position: fixed;
+  z-index: 2800;
+  min-width: 240px;
+  max-height: 420px;
+  overflow-y: auto;
+  padding: 4px;
+  border-radius: 10px;
+  background: var(--color-elevated-bg);
+  border: 1px solid var(--color-border);
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.32);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.open-with-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.9rem;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.open-with-menu__item:hover,
+.open-with-menu__item:focus-visible {
+  background: rgba(var(--color-accent-rgb), 0.14);
+}
+
+.open-with-menu__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.open-with-menu__default {
+  color: var(--color-muted);
+}
+
+.open-with-menu__status {
+  padding: 6px 10px;
+  color: var(--color-muted);
+  font-size: 0.85rem;
+}
+
+.open-with-menu__separator {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--color-border);
+}

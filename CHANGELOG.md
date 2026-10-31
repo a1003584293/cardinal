@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+- Add "Open With" to the file context menu: lists every application LaunchServices can use for the selection (default handler first) and can launch any of them by bundle id, falling back to the bundle path.
+- Ignore the nested `winnfsd/` checkout so its files can never be committed here.
 - Reopening a hidden window (Dock click, tray, Cmd+Shift+Space) now shows it on the Desktop you are currently on instead of yanking you back to the Desktop where it was last visible.
 - Bookmarks window follows the theme, font size and language immediately: UI preferences are now broadcast between the two windows instead of only being read when a window boots.
 - The bookmarks manager (Cmd+Shift+B) is now its own window: drag it anywhere on screen, including outside the Cardinal window, so it no longer covers the result list.

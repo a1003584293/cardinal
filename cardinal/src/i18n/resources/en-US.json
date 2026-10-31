@@ -64,6 +64,11 @@
   },
   "contextMenu": {
     "openItem": "Open",
+    "openWith": "Open With",
+    "openWithLoading": "Looking for applications…",
+    "openWithEmpty": "No applications found",
+    "openWithOther": "Other…",
+    "openWithDefault": "default",
     "quickLook": "QuickLook",
     "revealInFinder": "Reveal in Finder",
     "copyFile": "Copy File",

@@ -29,6 +29,7 @@ import { useViewMode } from './hooks/useViewMode';
 import { useSearchFilters } from './hooks/useSearchFilters';
 import { useFontSize } from './hooks/useFontSize';
 import { FiltersOverlay } from './components/FiltersOverlay';
+import { OpenWithMenu } from './components/OpenWithMenu';
 import { SortMenu } from './components/SortMenu';
 import type { SortKey, SortDirection } from './types/sort';
 import { DEFAULT_FILTER_PRESETS } from './types/searchFilters';
@@ -208,6 +209,8 @@ function App() {
   const {
     showContextMenu: showFilesContextMenu,
     showHeaderContextMenu: showFilesHeaderContextMenu,
+    openWithAnchor,
+    closeOpenWith,
   } = useContextMenu(autoFitColumns, toggleQuickLook);
 
   const {
@@ -967,6 +970,21 @@ function App() {
           x={sortMenuPoint.x}
           y={sortMenuPoint.y}
           onClose={() => setSortMenuPoint(null)}
+        />
+      ) : null}
+      {openWithAnchor ? (
+        <OpenWithMenu
+          path={openWithAnchor.path}
+          x={openWithAnchor.x}
+          y={openWithAnchor.y}
+          labels={{
+            title: t('contextMenu.openWith'),
+            loading: t('contextMenu.openWithLoading'),
+            empty: t('contextMenu.openWithEmpty'),
+            chooseOther: t('contextMenu.openWithOther'),
+            defaultSuffix: t('contextMenu.openWithDefault'),
+          }}
+          onClose={closeOpenWith}
         />
       ) : null}
       {bookmarkToast ? (
