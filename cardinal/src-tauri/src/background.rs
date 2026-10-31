@@ -284,7 +284,7 @@ pub fn reset_status_bar(app_handle: &AppHandle) {
                 rescan_errors: 0,
             },
         )
-        .unwrap();
+        .ok();
 }
 
 pub fn emit_status_bar_update(
@@ -301,17 +301,45 @@ pub fn emit_status_bar_update(
         if Instant::now().duration_since(*last_emit) < Duration::from_millis(100) {
             return;
         }
-        app_handle
-            .emit(
-                "status_bar_update",
-                StatusBarUpdate {
-                    scanned_files,
-                    processed_events,
-                    rescan_errors,
-                },
-            )
-            .unwrap();
+        // Never panic on a failed emit: this runs on the walk/worker threads and used to be
+        // able to kill them (and, through `thread::scope`, the caller).
+        let _ = app_handle.emit(
+            "status_bar_update",
+            StatusBarUpdate {
+                scanned_files,
+                processed_events,
+                rescan_errors,
+            },
+        );
         *last_emit = Instant::now();
+    }
+}
+
+/// Runs `f`, converting a panic into a logged error instead of letting it kill the loop.
+///
+/// The background loop owns the search cache and the only `search_rx` receiver. A panic in a
+/// single query used to unwind the whole thread: afterwards every `search` call failed with
+/// `RecvError` and the app stayed on "Updating" forever, with no evidence in any log (a bundle
+/// launched from Finder has no stderr). Catching here keeps the app usable and records the
+/// cause.
+pub(crate) fn catch_panic<T>(label: &str, f: impl FnOnce() -> T) -> Result<T, String> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(value) => Ok(value),
+        Err(payload) => {
+            let message = panic_payload_message(&payload);
+            error!("{label} panicked: {message}");
+            Err(message)
+        }
+    }
+}
+
+fn panic_payload_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(text) = payload.downcast_ref::<&str>() {
+        (*text).to_string()
+    } else if let Some(text) = payload.downcast_ref::<String>() {
+        text.clone()
+    } else {
+        "unknown panic".to_string()
     }
 }
 
@@ -434,7 +462,9 @@ fn handle_event_watcher_events(
 
     let mut snapshots = Vec::with_capacity(events.len());
     for event in events.iter() {
-        if event.flag == EventFlag::HistoryDone {
+        // `contains`, not `==`: the replay's final event can carry additional flag bits, and
+        // an exact comparison left the app on "Updating" forever.
+        if event.flag.contains(EventFlag::HistoryDone) {
             *history_ready = true;
             update_app_state(app_handle, AppLifecycleState::Ready);
         } else if *history_ready {
@@ -871,7 +901,7 @@ pub fn run_background_event_loop(
                 } else {
                     (!cache.is_noop() && scoped.ready.is_none()).then_some(cache)
                 };
-                tx.send(snapshot).expect("Failed to send cache");
+                let _ = tx.send(snapshot);
                 return;
             }
             recv(update_window_state_rx) -> _ => {
@@ -921,10 +951,21 @@ pub fn run_background_event_loop(
                 });
                 let action = decide_search_action(scope.as_deref(), indexing.is_some(), &scoped, covered_by_full);
 
+                // A panicking query must not take the whole background thread down: convert it
+                // into an error result so the caller is answered and the loop keeps running.
+                let run_query = |cache: &mut SearchCache| -> SearchJobResult {
+                    match catch_panic("search", || {
+                        cache.search_query_with_options(query, opts, cancellation_token)
+                    }) {
+                        Ok(outcome) => SearchJobResult::Completed(outcome),
+                        Err(reason) => SearchJobResult::Completed(Err(anyhow::anyhow!(
+                            "Search failed: {reason}"
+                        ))),
+                    }
+                };
+
                 let result = match action {
-                    SearchAction::Answer => Some(SearchJobResult::Completed(
-                        cache.search_query_with_options(query, opts, cancellation_token),
-                    )),
+                    SearchAction::Answer => Some(run_query(&mut cache)),
                     SearchAction::ReuseScope => {
                         let parked = scope
                             .as_deref()
@@ -934,9 +975,7 @@ pub fn run_background_event_loop(
                             event_watcher = EventWatcher::noop();
                         }
                         recent_snapshot = None;
-                        Some(SearchJobResult::Completed(
-                            cache.search_query_with_options(query, opts, cancellation_token),
-                        ))
+                        Some(run_query(&mut cache))
                     }
                     SearchAction::RestoreFullAndAnswer => {
                         // Non-scoped queries (and scopes the full index covers) must run
@@ -952,9 +991,7 @@ pub fn run_background_event_loop(
                             .1;
                         }
                         recent_snapshot = None;
-                        Some(SearchJobResult::Completed(
-                            cache.search_query_with_options(query, opts, cancellation_token),
-                        ))
+                        Some(run_query(&mut cache))
                     }
                     SearchAction::BuildScope(scope) => {
                         // Cancel any walk for a previous scope before starting a new one.
@@ -992,7 +1029,8 @@ pub fn run_background_event_loop(
                     },
                     None => SearchJobResult::Indexing,
                 });
-                result_tx.send(result).expect("Failed to send result");
+                // The caller may have gone away (window closed/reloaded); never panic.
+                let _ = result_tx.send(result);
             }
             recv(scoped_index_rx) -> built => {
                 let built = built.expect("Scoped index channel closed");
@@ -1186,14 +1224,20 @@ pub fn run_background_event_loop(
             }
             recv(event_watcher) -> events => {
                 let events = events.expect("Event stream closed");
-                handle_event_watcher_events(
-                    app_handle,
-                    &mut cache,
-                    events,
-                    &mut history_ready,
-                    &mut processed_events,
-                    &mut recent_snapshot,
-                );
+                // A malformed event batch must not take the loop down with it.
+                let handled = catch_panic("handle_fs_events", || {
+                    handle_event_watcher_events(
+                        app_handle,
+                        &mut cache,
+                        events,
+                        &mut history_ready,
+                        &mut processed_events,
+                        &mut recent_snapshot,
+                    )
+                });
+                if handled.is_err() {
+                    recent_snapshot = None;
+                }
             }
         }
     }
@@ -2291,6 +2335,35 @@ mod tests {
         assert_eq!(a.extension().unwrap(), "db");
         // FNV-1a of an empty input is the offset basis; guards against a swapped-in hasher.
         assert_eq!(stable_path_hash(b""), 0xcbf2_9ce4_8422_2325);
+    }
+
+    #[test]
+    fn history_done_is_detected_when_combined_with_other_flags() {
+        // Regression: the loop compared the flag with `==`, so a HistoryDone event carrying any
+        // other bit left the app on "Updating" forever (the cache was fine, the watcher ran,
+        // and searches answered — but the lifecycle never advanced).
+        let combined = EventFlag::HistoryDone | EventFlag::ItemIsDir | EventFlag::MustScanSubDirs;
+        assert!(
+            combined.contains(EventFlag::HistoryDone),
+            "HistoryDone must be detected through `contains`"
+        );
+        assert_ne!(
+            combined,
+            EventFlag::HistoryDone,
+            "the combined value is what broke the exact comparison"
+        );
+    }
+
+    #[test]
+    fn catch_panic_converts_a_panic_into_an_error() {
+        // A panicking query used to unwind the whole background thread, leaving every later
+        // search with `RecvError`.
+        let ok = catch_panic("test", || 7);
+        assert_eq!(ok, Ok(7));
+
+        let failed = catch_panic("test", || -> i32 { panic!("boom") });
+        assert!(failed.is_err());
+        assert!(failed.unwrap_err().contains("boom"));
     }
 
     #[test]

@@ -1,6 +1,11 @@
 # Changelog
 
 ## Unreleased
+- Fix the ignore-path migration never running: it used a single "user edited" flag that a Preferences save set, so `/Volumes` was never added and the app indexed every NFS/SMB share (2.9M files and an endless "Updating"). Defaults are now tracked individually, so a new default is added once and a later deletion stays deleted.
+- Detect `HistoryDone` with `contains` instead of exact equality, so the lifecycle can reach `Ready` even when the replay's final event carries other flag bits.
+- Keep the background thread alive: a panicking search is converted into an error result, event-batch handling is guarded, and channel sends/emits no longer panic. Previously one panic killed the thread and every later search failed with `RecvError`.
+- Write panics to `~/Library/Logs/Cardinal/panic.log` (a Finder-launched bundle has no stderr, so crashes left no trace).
+- Report a stopped background thread as an actionable message instead of `RecvError`.
 - Add "Open With" to the file context menu: lists every application LaunchServices can use for the selection (default handler first) and can launch any of them by bundle id, falling back to the bundle path.
 - Ignore the nested `winnfsd/` checkout so its files can never be committed here.
 - Reopening a hidden window (Dock click, tray, Cmd+Shift+Space) now shows it on the Desktop you are currently on instead of yanking you back to the Desktop where it was last visible.

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { migrateStoredIgnorePaths, useIgnorePaths } from '../useIgnorePaths';
 
 const STORAGE_KEY = 'cardinal.ignorePaths';
-const USER_EDITED_KEY = 'cardinal.ignorePaths.userEdited';
+const APPLIED_DEFAULTS_KEY = 'cardinal.ignorePaths.defaultsApplied';
 const EXPECTED_DEFAULT_IGNORE_PATHS = [
   '/Volumes',
   '~/Library/CloudStorage',
@@ -33,6 +33,12 @@ describe('useIgnorePaths', () => {
 
   it('hydrates from stored values and filters invalid entries', async () => {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify([' /tmp ', '', 42, '   ', '/var']));
+    // Every default already applied, so the migration is a no-op and this test stays focused
+    // on parsing/URL filtering.
+    window.localStorage.setItem(
+      APPLIED_DEFAULTS_KEY,
+      JSON.stringify(EXPECTED_DEFAULT_IGNORE_PATHS),
+    );
     const setItemSpy = vi.spyOn(Storage.prototype, 'setItem');
 
     const { result } = renderHook(() => useIgnorePaths());
@@ -84,7 +90,8 @@ describe('useIgnorePaths', () => {
 
     await flushEffects();
 
-    expect(setItemSpy).not.toHaveBeenCalled();
+    // The migration bookkeeping key may be created; the user's list must not be rewritten.
+    expect(setItemSpy).not.toHaveBeenCalledWith(STORAGE_KEY, expect.anything());
   });
 
   it('cleans and persists updates', async () => {
@@ -111,37 +118,52 @@ describe('useIgnorePaths', () => {
 
     const { result } = renderHook(() => useIgnorePaths());
 
-    expect(result.current.ignorePaths).toEqual(EXPECTED_DEFAULT_IGNORE_PATHS);
+    expect(result.current.ignorePaths).toEqual([...legacyDefaults, '/Volumes']);
     expect(window.localStorage.getItem(STORAGE_KEY)).toBe(
-      JSON.stringify(EXPECTED_DEFAULT_IGNORE_PATHS),
+      JSON.stringify([...legacyDefaults, '/Volumes']),
     );
   });
 
-  it('never migrates after the user edited the list', async () => {
-    const legacyDefaults = EXPECTED_DEFAULT_IGNORE_PATHS.filter((path) => path !== '/Volumes');
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(legacyDefaults));
-    window.localStorage.setItem(USER_EDITED_KEY, 'true');
+  it('does not re-add a default the user deliberately deleted', async () => {
+    // Regression: the previous implementation used a single "user edited" boolean, so one
+    // Preferences save disabled migrations forever and `/Volumes` was never added — which made
+    // the app index every NFS/SMB share.
+    const current = EXPECTED_DEFAULT_IGNORE_PATHS.filter((path) => path !== '/Volumes');
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(current));
+    window.localStorage.setItem(
+      APPLIED_DEFAULTS_KEY,
+      JSON.stringify(EXPECTED_DEFAULT_IGNORE_PATHS),
+    );
 
     const { result } = renderHook(() => useIgnorePaths());
 
-    expect(result.current.ignorePaths).toEqual(legacyDefaults);
-    expect(window.localStorage.getItem(STORAGE_KEY)).toBe(JSON.stringify(legacyDefaults));
+    expect(result.current.ignorePaths).toEqual(current);
+    expect(window.localStorage.getItem(STORAGE_KEY)).toBe(JSON.stringify(current));
   });
 
-  it('keeps custom ignore entries while adding new defaults', () => {
+  it('merges a default that was never applied, even into a customised list', () => {
     const legacyDefaults = EXPECTED_DEFAULT_IGNORE_PATHS.filter((path) => path !== '/Volumes');
-    // A purely-defaults list plus nothing custom is the migration case; a list with custom
-    // entries is left alone so user intent wins.
-    expect(migrateStoredIgnorePaths([...legacyDefaults, '/data/tmp'], false)).toBeNull();
-    expect(migrateStoredIgnorePaths([...legacyDefaults], false)).toEqual(
-      EXPECTED_DEFAULT_IGNORE_PATHS,
-    );
-    expect(migrateStoredIgnorePaths([], false)).toBeNull();
-    expect(migrateStoredIgnorePaths(['/data/tmp'], false)).toBeNull();
+    const baseline = legacyDefaults; // older profile: `/Volumes` was not shipped yet
+
+    // New defaults are appended so the user's existing order is preserved.
+    expect(migrateStoredIgnorePaths(legacyDefaults, baseline)).toEqual([
+      ...legacyDefaults,
+      '/Volumes',
+    ]);
+    // Custom entries survive and nothing is duplicated.
+    expect(migrateStoredIgnorePaths([...legacyDefaults, '/data/tmp'], baseline)).toEqual([
+      ...legacyDefaults,
+      '/data/tmp',
+      '/Volumes',
+    ]);
+    // An empty list is a deliberate "ignore nothing".
+    expect(migrateStoredIgnorePaths([], baseline)).toBeNull();
     // Already current: no rewrite.
-    expect(migrateStoredIgnorePaths(EXPECTED_DEFAULT_IGNORE_PATHS, false)).toBeNull();
-    // User edited the list: never migrate.
-    expect(migrateStoredIgnorePaths(legacyDefaults, true)).toBeNull();
+    expect(
+      migrateStoredIgnorePaths(EXPECTED_DEFAULT_IGNORE_PATHS, EXPECTED_DEFAULT_IGNORE_PATHS),
+    ).toBeNull();
+    // Applied before: a later deletion is respected.
+    expect(migrateStoredIgnorePaths(legacyDefaults, EXPECTED_DEFAULT_IGNORE_PATHS)).toBeNull();
   });
 
   it('falls back to defaults when stored JSON is invalid', async () => {

@@ -16,8 +16,8 @@ use bookmarks_window::{hide_bookmarks_window, show_bookmarks_window, toggle_book
 use cardinal_sdk::EventWatcher;
 use commands::{
     NodeInfoRequest, RecentNodesRequest, SearchJob, SearchState, WatchConfigUpdate,
-    activate_main_window, close_quicklook, copy_files_to_clipboard, get_app_status, get_nodes_info,
-    choose_app_for_path, get_recent_nodes, get_sorted_view, hide_main_window,
+    activate_main_window, choose_app_for_path, close_quicklook, copy_files_to_clipboard,
+    get_app_status, get_nodes_info, get_recent_nodes, get_sorted_view, hide_main_window,
     normalize_watch_config, open_in_finder, open_path, open_with_app, open_with_options,
     read_text_file, search, set_tray_activation_policy, set_watch_config, start_logic,
     toggle_main_window, toggle_quicklook, trigger_rescan, update_icon_viewport, update_quicklook,
@@ -57,6 +57,110 @@ pub(crate) struct LogicStartConfig {
     pub include_paths: Vec<String>,
 }
 
+/// Writes panic reports next to the app's logs.
+///
+/// A bundle launched from Finder has no stderr, so a panic in the background thread used to
+/// leave nothing behind: the app just sat on "Updating" and every search failed with
+/// `RecvError`. Persisting the message + location (and a backtrace when `RUST_BACKTRACE` is
+/// set) makes the next occurrence diagnosable.
+fn install_panic_logger() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let thread = std::thread::current();
+        let name = thread.name().unwrap_or("<unnamed>");
+        let location = info
+            .location()
+            .map(|loc| format!("{}:{}:{}", loc.file(), loc.line(), loc.column()))
+            .unwrap_or_else(|| "<unknown>".to_string());
+        let payload = info.payload();
+        let message = payload
+            .downcast_ref::<&str>()
+            .map(|text| (*text).to_string())
+            .or_else(|| payload.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "<non-string panic payload>".to_string());
+
+        let report = format!(
+            "[{}] thread '{}' panicked at {location}: {message}\n",
+            chrono_like_timestamp(),
+            name
+        );
+        if let Some(path) = panic_log_path() {
+            if let Some(dir) = path.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+            {
+                use std::io::Write as _;
+                let _ = file.write_all(report.as_bytes());
+                let _ = file.flush();
+            }
+        }
+
+        previous(info);
+    }));
+}
+
+fn chrono_like_timestamp() -> String {
+    // `SystemTime` -> "YYYY-MM-DD HH:MM:SS" without pulling in a date crate.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let (days, secs) = (now / 86_400, now % 86_400);
+    let (mut year, mut remaining) = (1970u32, days as u32);
+    loop {
+        let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+        let length = if leap { 366 } else { 365 };
+        if remaining < length {
+            break;
+        }
+        remaining -= length;
+        year += 1;
+    }
+    let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    let month_days = [
+        31,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
+    let mut month = 1;
+    for (index, length) in month_days.iter().enumerate() {
+        if remaining < *length {
+            month = index as u32 + 1;
+            break;
+        }
+        remaining -= *length;
+    }
+    format!(
+        "{year:04}-{month:02}-{:02} {:02}:{:02}:{:02}",
+        remaining + 1,
+        secs / 3600,
+        (secs % 3600) / 60,
+        secs % 60
+    )
+}
+
+fn panic_log_path() -> Option<std::path::PathBuf> {
+    let home = std::env::var_os("HOME")?;
+    Some(
+        std::path::PathBuf::from(home)
+            .join("Library/Logs/Cardinal")
+            .join("panic.log"),
+    )
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() -> Result<()> {
     let builder = tracing_subscriber::fmt();
@@ -65,6 +169,8 @@ pub fn run() -> Result<()> {
     } else {
         builder.with_max_level(LevelFilter::INFO).init();
     }
+
+    install_panic_logger();
 
     let (finish_tx, finish_rx) = bounded::<Sender<Option<SearchCache>>>(1);
     let (search_tx, search_rx) = unbounded::<SearchJob>();

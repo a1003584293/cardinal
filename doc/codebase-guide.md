@@ -242,6 +242,9 @@ cargo fmt --all
     - **UI 偏好要跨窗口广播**：主题/字号/语言都写在各自 document 上，`storage` 事件不跨 webview 触发，所以 `runtime/uiPreferences.ts` 用 `UI_PREFERENCES_CHANGED_EVENT` 广播，两边启动时 `applyStoredUiPreferences()` + `subscribeUiPreferencesChanged()`。漏了这一步的表现是"主窗口变深色，书签窗口要重启才变"
     - 该模块**故意不 import `i18n/config`**（会拉进 `initReactI18next`，让 App 的单测挂掉）；语言通过 `onAfterApply` 回调交给 `main.tsx` 处理
 17. **书签面板改为非模态浮层**：`position: fixed; top/right/bottom`，容器 `pointer-events: none`、卡片 `auto`，`main` 不再 `aria-hidden`。这样连续右键「在新标签页搜索」能立刻看到新 tab，而不是以为没生效
+17.2. **后台线程绝不能被一次 panic 带走**：循环里 `search_query_with_options`、`handle_fs_events` 都用 `catch_panic` 包住；所有 `result_tx.send` / `app_handle.emit` 都忽略错误。之前任一 panic 都会让循环线程退出，之后每次搜索都报 `RecvError`，界面永远停在"正在更新"。症状识别：`sample <pid>` 看不到 `cardinal-sdk-event-watcher` 线程 = 循环已死
+17.3. **`HistoryDone` 必须用 `contains` 判断**：FSEvents 的最后一个事件可能带上其他标志位，`==` 会让状态永远停在 `Updating`
+17.4. **忽略默认值的迁移不能用"用户改过就永久跳过"的布尔量**：`PreferencesOverlay` 保存时会调 `setIgnorePaths`，一次保存就会把标记置位，导致新默认值（如 `/Volumes`）永远加不进去 → 整盘索引把所有 NFS 卷扫进来。正确做法是 `APPLIED_DEFAULTS_KEY` 记录"已应用过哪些默认项"
 17.5. **监听器必须只订阅一次**：Tauri 的 `listen()` 返回 Promise，所以 `useEffect` 里 `let unlisten; listen().then(fn => unlisten = fn); return () => unlisten?.()` 这个写法**只要 deps 变化就会泄漏**（cleanup 跑的时候 `unlisten` 还是 undefined）。修复模式见 `useBookmarkOpenListener`：`useStableEvent` 包 handler + `cancelled` 标志，late resolve 时自己 `fn()` 退订
 18. **tab 过滤器隔离**：`createTab` / `activateTab` 的 `setState` 尚未提交时调用 `setActiveTabFilter` 会写到**上一个** active tab。因此：
     - 打开书签/切换 tab 只调用 `selectFilterPreset`（只更新下拉），过滤器随 tab 一起由 `createTab(query, filter)` 带上，或用 `queueSearchWithFilter` 直接驱动搜索
@@ -359,7 +362,8 @@ cargo fmt --all
 | 文件图标策略（系统应用图标 vs 封面图） | `fs-icon/src/lib.rs` 的 `prefers_cover_thumbnail` + `APP_ICON_CACHE` |
 | 启动"最近文件"列表 | `search-cache/src/cache.rs` 的 `most_recent_nodes` + `RECENT_NODE_LIMIT` |
 | 首次索引期间能否搜索 | `background.rs` 的 `spawn_index_load` / `spawn_scoped_index` / `decide_search_action` + `SEARCH_INDEXING`/`SCOPED_INDEXING` 状态 |
-| 忽略路径默认值迁移 | `useIgnorePaths.ts` 的 `migrateStoredIgnorePaths`（只迁移"全是历史默认值"的列表） |
+| 忽略路径默认值迁移 | `useIgnorePaths.ts` 的 `migrateStoredIgnorePaths` + `APPLIED_DEFAULTS_KEY`（按默认项逐个记录，删掉的默认值不会被重新加回） |
+| 崩溃日志 | `~/Library/Logs/Cardinal/panic.log`（`lib.rs` 的 `install_panic_logger`） |
 | 完全磁盘访问授权/免重启 | `useFullDiskAccessPermission.ts`（轮询）+ `PermissionOverlay.tsx` |
 | 启动闸门（何时开始索引） | `useAppPreferences.ts` 的 logic gate + 后端 `LOGIC_START` / `PENDING_LOGIC_START` |
 | 窗口显示/位置校正 | `window_controls.rs` 的 `activate_window` / `ensure_on_screen` |

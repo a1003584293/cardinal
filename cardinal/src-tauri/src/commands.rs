@@ -242,6 +242,13 @@ pub(crate) fn normalize_watch_config(
     Some((watch_root, ignore_paths, include_paths))
 }
 
+/// Shown when the background indexing thread is no longer running.
+///
+/// It used to surface as `Failed to receive search result: RecvError`, which tells the user
+/// nothing. The thread only exits when it panics (see the panic log at
+/// `~/Library/Logs/Cardinal/panic.log`) or during shutdown, and the only remedy is a restart.
+const BACKGROUND_THREAD_GONE: &str = "后台索引线程已停止（可能因异常退出）。请重启 Cardinal；详细原因见 ~/Library/Logs/Cardinal/panic.log";
+
 #[derive(Serialize)]
 pub struct NodeInfo {
     pub path: String,
@@ -342,10 +349,21 @@ pub async fn search(
         result_tx,
     }) {
         error!("Failed to send search request: {e:?}");
-        return Err(format!("Failed to send search request: {e:?}"));
+        // The receiver only disappears when the background loop is gone (it panicked or the
+        // app is shutting down); retrying cannot help, so say what the user should do.
+        return Err(BACKGROUND_THREAD_GONE.to_string());
     }
 
-    match result_rx.recv() {
+    let received = match result_rx.recv() {
+        Ok(value) => Ok(value),
+        Err(e) => {
+            error!("Failed to receive search result: {e:?}");
+            Err(BACKGROUND_THREAD_GONE.to_string())
+        }
+    };
+
+    match received {
+        Err(message) => Err(message),
         Ok(SearchJobResult::Indexing) => Ok(SearchResponse {
             results: vec![],
             highlights: vec![],
@@ -382,10 +400,6 @@ pub async fn search(
                 }
             })
             .map_err(|e| format!("Failed to process search result: {e:?}")),
-        Err(e) => {
-            error!("Failed to receive search result: {e:?}");
-            Err(format!("Failed to receive search result: {e:?}"))
-        }
     }
 }
 
@@ -645,7 +659,11 @@ pub fn open_with_options(path: String) -> Option<OpenWithOptions> {
 /// `~/Applications` and other volumes); `app_path` is the fallback when LaunchServices cannot
 /// resolve the identifier, which happens for apps that were moved or are not registered.
 #[tauri::command]
-pub async fn open_with_app(path: String, bundle_id: String, app_path: String) -> Result<(), String> {
+pub async fn open_with_app(
+    path: String,
+    bundle_id: String,
+    app_path: String,
+) -> Result<(), String> {
     // `open -b <bundle id>` asks LaunchServices to resolve the handler, which is the closest
     // equivalent to double-clicking the app in Finder.
     let by_bundle = Command::new("open")
