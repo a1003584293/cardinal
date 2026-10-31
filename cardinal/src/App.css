@@ -1027,6 +1027,8 @@ button:active:not(:disabled) {
 
 .file-icon-placeholder {
   display: inline-block;
+  width: 100%;
+  height: 100%;
   border-radius: 4px;
   background-color: var(--color-border);
   opacity: 0.55;
@@ -2255,9 +2257,14 @@ button:active:not(:disabled) {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
+  /* Icon box (fixed) + label box (fixed three lines) exactly fill the cell, so there is no
+     free space to distribute: the icon never moves and the last text line always lands on the
+     same baseline, however many lines a name wraps to. This mirrors the tiled view of
+     Explorer/Everything. */
+  justify-content: flex-end;
+  gap: 2px;
   border-radius: 8px;
-  padding: 2px;
+  padding: 0 2px;
   cursor: default;
 }
 
@@ -2271,32 +2278,71 @@ button:active:not(:disabled) {
 
 .icon-grid-item__icon {
   display: flex;
-  align-items: center;
+  /* Bottom-align the artwork: a 16:9 video cover is letterboxed inside a square box while a
+     tall document icon fills it, so centring made the gap between picture and name depend on
+     the artwork's aspect ratio. Anchoring both to the bottom keeps that gap identical. */
+  align-items: flex-end;
   justify-content: center;
   width: 100%;
-  flex: 1;
-  min-height: 0;
+  /* Fixed box, never stretched nor shrunk by the label: a three-line name must not steal
+     height from the icon, otherwise icons of the same file type stop lining up row to row. */
+  flex: 0 0 var(--icon-size, 100%);
+  height: var(--icon-size, 100%);
   overflow: hidden;
 }
 
 .icon-grid-item__icon img {
-  /* The backend rasters icons at the requested preset size, so let them fill the cell and
-     scale with the icon-size presets instead of only shrinking. */
+  /* Letterbox inside the fixed box. `object-position` pins the artwork to the bottom edge, so
+     a 16:9 cover and a tall document icon end up the same distance from the name below them. */
   width: 100%;
   height: 100%;
   object-fit: contain;
+  object-position: center bottom;
   border-radius: 4px;
 }
 
+/* Fixed three-line label box; the text inside is bottom-aligned. A one-line name therefore
+   leaves its spare space between the icon and the text, and a three-line name fills the box —
+   in both cases the last line sits on the same baseline. `--label-width` / `--label-height`
+   come from IconGrid.tsx; keep the line height in sync with `gridLabelAreaHeight()` there. */
 .icon-grid-item__label {
+  flex: 0 0 var(--label-height, 3.6em);
+  box-sizing: border-box;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
   width: 100%;
+  height: var(--label-height, 3.6em);
+  padding: 0 2px;
+  overflow: hidden;
+  color: var(--color-text);
+}
+
+/* Up to three lines and at most six CJK characters per line, ellipsised when the text no
+   longer fits. Latin letters are narrower, so more of them fit in the same width.
+   `word-break: break-all` is essential: `overflow-wrap: anywhere` only splits a word when it
+   cannot fit on a line of its own, so a name like `白咲碧122614_0...` kept `白咲碧` alone on
+   line 1 and moved the whole number to line 2. Everything/Explorer fill each line greedily. */
+.icon-grid-item__label-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  word-break: break-all;
+  width: max-content;
+  max-width: min(var(--label-width, 6em), 100%);
   text-align: center;
   font-size: 0.78rem;
-  color: var(--color-text);
-  padding: 0 2px;
+  line-height: 1.2;
+}
+
+/* Tall artwork (poster-shaped covers, portrait thumbnails) already fills the icon box, so it
+   gets two text lines instead of three: the extra line would otherwise make the tile look
+   cramped next to its neighbours. `data-lines` is set by IconGridItem from the artwork's
+   natural aspect ratio. */
+.icon-grid-item__label[data-lines='two'] .icon-grid-item__label-text {
+  -webkit-line-clamp: 2;
 }
 
 .icon-grid-item.is-selected .icon-grid-item__label {
@@ -2558,6 +2604,10 @@ button:active:not(:disabled) {
   gap: 6px;
   padding: 2px 6px;
   overflow: hidden;
+  /* The list is a column flex container, so rows would shrink to fit instead of scrolling.
+     `overflow: hidden` zeroes each row's automatic minimum size, which is why importing many
+     bookmarks collapsed every row into a 2px line. */
+  flex: 0 0 auto;
   /* Separator so dense bookmark lists stay scannable. */
   border-bottom: 1px solid var(--bookmark-row-border);
 }

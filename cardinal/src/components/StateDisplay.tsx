@@ -7,7 +7,13 @@ type StateProps = {
   message?: React.ReactNode;
 };
 
-export type DisplayState = 'loading' | 'indexing' | 'error' | 'empty' | 'results';
+export type DisplayState =
+  | 'loading'
+  | 'indexing'
+  | 'error'
+  | 'empty'
+  | 'scope-unavailable'
+  | 'results';
 type EmptyState = Exclude<DisplayState, 'results'>;
 
 type StateDisplayProps = {
@@ -17,6 +23,8 @@ type StateDisplayProps = {
   title?: string | null;
   query?: string;
   directoryQuery?: string;
+  /** Folder scope reported as unavailable by the backend. */
+  scope?: string | null;
 };
 
 const State = ({ icon, title, message }: StateProps): React.JSX.Element => (
@@ -36,6 +44,7 @@ export function StateDisplay({
   title,
   query,
   directoryQuery,
+  scope,
 }: StateDisplayProps): React.JSX.Element {
   const { t } = useTranslation();
   if (state === 'loading') {
@@ -48,6 +57,16 @@ export function StateDisplay({
         icon={<div className="spinner" />}
         title={title ?? t('stateDisplay.indexingTitle')}
         message={message ?? t('stateDisplay.indexingMessage')}
+      />
+    );
+  }
+
+  if (state === 'scope-unavailable') {
+    return (
+      <State
+        icon={<div className="error-icon">!</div>}
+        title={t('stateDisplay.scopeUnavailableTitle', { scope: scope ?? directoryQuery ?? '' })}
+        message={t('stateDisplay.scopeUnavailableMessage')}
       />
     );
   }

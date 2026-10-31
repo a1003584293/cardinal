@@ -6,6 +6,9 @@ export type SearchTab = {
   // Filter fragment (e.g. `ext:mp4;mkv`) owned by this tab, so switching tabs restores the
   // filter as well as the text query.
   filterQuery: string;
+  // Folder scope owned by this tab. Keeping it here (instead of in the shared search params)
+  // is what stops a scope typed in one tab from narrowing every other tab.
+  directoryQuery: string;
 };
 
 let tabSequence = 0;
@@ -18,11 +21,12 @@ export type SearchTabsController = {
   tabs: SearchTab[];
   activeTabId: string;
   activeTab: SearchTab;
-  createTab: (query?: string, filterQuery?: string) => string;
+  createTab: (query?: string, filterQuery?: string, directoryQuery?: string) => string;
   closeTab: (id: string) => void;
   activateTab: (id: string) => void;
   setActiveTabQuery: (query: string) => void;
   setActiveTabFilter: (filterQuery: string) => void;
+  setActiveTabDirectory: (directoryQuery: string) => void;
 };
 
 /**
@@ -31,13 +35,19 @@ export type SearchTabsController = {
  * (App reacts to `activeTabId` changes).
  */
 export function useSearchTabs(): SearchTabsController {
-  const [initialTab] = useState<SearchTab>(() => ({ id: nextTabId(), query: '', filterQuery: '' }));
+  const emptyTab = (): SearchTab => ({
+    id: nextTabId(),
+    query: '',
+    filterQuery: '',
+    directoryQuery: '',
+  });
+  const [initialTab] = useState<SearchTab>(emptyTab);
   const [tabs, setTabs] = useState<SearchTab[]>([initialTab]);
   const [activeTabId, setActiveTabId] = useState<string>(initialTab.id);
 
-  const createTab = useCallback((query = '', filterQuery = ''): string => {
+  const createTab = useCallback((query = '', filterQuery = '', directoryQuery = ''): string => {
     const id = nextTabId();
-    setTabs((prev) => [...prev, { id, query, filterQuery }]);
+    setTabs((prev) => [...prev, { id, query, filterQuery, directoryQuery }]);
     setActiveTabId(id);
     return id;
   }, []);
@@ -50,7 +60,7 @@ export function useSearchTabs(): SearchTabsController {
       }
       const remaining = tabs.filter((tab) => tab.id !== id);
       if (remaining.length === 0) {
-        const fresh = { id: nextTabId(), query: '', filterQuery: '' };
+        const fresh = emptyTab();
         setTabs([fresh]);
         setActiveTabId(fresh.id);
         return;
@@ -84,6 +94,15 @@ export function useSearchTabs(): SearchTabsController {
     [activeTabId],
   );
 
+  const setActiveTabDirectory = useCallback(
+    (directoryQuery: string) => {
+      setTabs((prev) =>
+        prev.map((tab) => (tab.id === activeTabId ? { ...tab, directoryQuery } : tab)),
+      );
+    },
+    [activeTabId],
+  );
+
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0];
 
   return {
@@ -95,5 +114,6 @@ export function useSearchTabs(): SearchTabsController {
     activateTab,
     setActiveTabQuery,
     setActiveTabFilter,
+    setActiveTabDirectory,
   };
 }

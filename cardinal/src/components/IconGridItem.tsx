@@ -1,4 +1,4 @@
-import React, { memo, useCallback, useRef } from 'react';
+import React, { memo, useCallback, useRef, useState } from 'react';
 import type { CSSProperties, MouseEvent as ReactMouseEvent } from 'react';
 import type { SearchResultItem } from '../types/search';
 import { splitPath } from '../utils/path';
@@ -19,6 +19,16 @@ type IconGridItemProps = {
   onContextMenu?: (event: ReactMouseEvent<HTMLDivElement>, path: string, rowIndex: number) => void;
 };
 
+/**
+ * Height/width ratio at or above which artwork counts as "tall".
+ *
+ * NSWorkspace rasterises document/folder icons on a square canvas (ratio ~1.0), which leaves no
+ * vertical slack in the icon box; a QuickLook video cover is 16:9 (ratio ~0.56) and has plenty.
+ * Tall artwork therefore gets two text lines and wide artwork keeps three, so that a tile never
+ * has to choose between squeezing its icon and leaving a gap.
+ */
+const TALL_ARTWORK_RATIO = 0.9;
+
 export const IconGridItem = memo(function IconGridItem({
   item,
   rowIndex,
@@ -37,6 +47,17 @@ export const IconGridItem = memo(function IconGridItem({
 
   const path = item.path;
   const filename = path === '/' ? '' : splitPath(path).name;
+
+  // Square document/folder icons fill the icon box vertically, so a third text line would
+  // squeeze the icon and break the row's alignment. Those tiles get two lines; wide artwork
+  // (16:9 covers) has the slack for three.
+  const [tallArtwork, setTallArtwork] = useState(false);
+  const handleIconLoad = useCallback((event: React.SyntheticEvent<HTMLImageElement>) => {
+    const { naturalWidth, naturalHeight } = event.currentTarget;
+    if (naturalWidth > 0 && naturalHeight > 0) {
+      setTallArtwork(naturalHeight / naturalWidth >= TALL_ARTWORK_RATIO);
+    }
+  }, []);
 
   const handleMouseDown = (event: ReactMouseEvent<HTMLDivElement>) => {
     if (event.button !== 0) {
@@ -116,12 +137,22 @@ export const IconGridItem = memo(function IconGridItem({
     >
       <div className="icon-grid-item__icon">
         {item.icon ? (
-          <img src={item.icon} alt="" draggable={false} />
+          <img
+            src={item.icon}
+            alt=""
+            draggable={false}
+            onLoad={handleIconLoad}
+            onError={() => setTallArtwork(false)}
+          />
         ) : (
           <span className="file-icon file-icon-placeholder" aria-hidden="true" />
         )}
       </div>
-      <span className="icon-grid-item__label">{filename}</span>
+      {/* The wrapper reserves the label area and bottom-aligns the text, so tiles with one-line
+          and three-line names share the same text baseline. */}
+      <span className="icon-grid-item__label" data-lines={tallArtwork ? 'two' : 'three'}>
+        <span className="icon-grid-item__label-text">{filename}</span>
+      </span>
     </div>
   );
 });

@@ -33,6 +33,8 @@
     "indexingProgress": "已扫描 {{formatted}} 个文件。想立即搜索，可在文件夹范围中输入完整路径（例如 ~/Documents）。",
     "scopeIndexingTitle": "正在索引所选文件夹…",
     "scopeIndexingMessage": "已在 {{scope}} 中扫描 {{formatted}} 项，索引完成后会自动显示结果。",
+    "scopeUnavailableTitle": "“{{scope}}” 不是文件夹",
+    "scopeUnavailableMessage": "文件夹范围需要一个已存在的目录，例如 /Users/you/Documents 或 ~/Downloads。清空范围框即可搜索全部位置。",
     "error": "搜索出现错误",
     "emptyTitle": "\"{{query}}\" 没有匹配结果",
     "emptyMessage": "尝试调整关键字或筛选条件。",

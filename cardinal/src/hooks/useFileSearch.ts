@@ -31,6 +31,8 @@ type SearchState = {
   indexingScope: string | null;
   /** Bumped on every retry; the poll effect depends on it (the rest of the state is stable). */
   indexingPoll: number;
+  /** Folder scope that turned out not to be a directory, if any. */
+  unavailableScope: string | null;
   lifecycleState: AppLifecycleStatus;
 };
 
@@ -81,6 +83,10 @@ type SearchAction =
       type: 'SEARCH_INDEXING';
       payload: { query: string; directoryQuery: string; scope: string | null };
     }
+  | {
+      type: 'SEARCH_SCOPE_UNAVAILABLE';
+      payload: { query: string; directoryQuery: string; scope: string };
+    }
   | { type: 'SET_LIFECYCLE_STATE'; payload: { status: AppLifecycleStatus } };
 
 const initialSearchState: SearchState = {
@@ -100,6 +106,7 @@ const initialSearchState: SearchState = {
   indexing: false,
   indexingScope: null,
   indexingPoll: 0,
+  unavailableScope: null,
   lifecycleState: 'Initializing',
 };
 
@@ -233,6 +240,24 @@ function reducer(state: SearchState, action: SearchAction): SearchState {
         indexing: true,
         indexingScope: action.payload.scope,
         indexingPoll: state.indexingPoll + 1,
+        unavailableScope: null,
+      };
+    case 'SEARCH_SCOPE_UNAVAILABLE':
+      return {
+        ...state,
+        results: [],
+        resultsVersion: state.resultsVersion + 1,
+        currentQuery: action.payload.query,
+        currentDirectoryQuery: action.payload.directoryQuery,
+        highlightTerms: [],
+        showLoadingUI: false,
+        initialFetchCompleted: true,
+        durationMs: null,
+        resultCount: 0,
+        searchError: null,
+        indexing: false,
+        indexingScope: null,
+        unavailableScope: action.payload.scope,
       };
     case 'SET_LIFECYCLE_STATE':
       return {
@@ -281,6 +306,11 @@ type UseFileSearchResult = {
   queueSearchWithFilter: (query: string, filterQuery: string, options?: QueueSearchOptions) => void;
   queueDirectorySearch: (directoryQuery: string, options?: QueueSearchOptions) => void;
   queueDirectoryScopeOpen: (directoryScopeOpen: boolean) => void;
+  /** Restores a tab's query, filter and folder scope in a single search. */
+  queueTabSearch: (
+    next: { query: string; filterQuery: string; directoryQuery: string },
+    options?: QueueSearchOptions,
+  ) => void;
   handleStatusUpdate: (scannedFiles: number, processedEvents: number, rescanErrors: number) => void;
   setLifecycleState: (status: AppLifecycleStatus) => void;
   requestRescan: () => Promise<void>;
@@ -391,6 +421,19 @@ export function useFileSearch(): UseFileSearchResult {
       if (rawResults.statusCode === SearchStatusCode.CANCELLED) {
         cancelTimer(loadingDelayTimerRef);
         dispatch({ type: 'SEARCH_CANCELLED' });
+        return;
+      }
+
+      if (rawResults.statusCode === SearchStatusCode.SCOPE_UNAVAILABLE) {
+        cancelTimer(loadingDelayTimerRef);
+        dispatch({
+          type: 'SEARCH_SCOPE_UNAVAILABLE',
+          payload: {
+            query,
+            directoryQuery,
+            scope: rawResults.scope ?? directoryQuery,
+          },
+        });
         return;
       }
 
@@ -548,6 +591,28 @@ export function useFileSearch(): UseFileSearchResult {
     [queueSearchParams],
   );
 
+  /**
+   * Applies everything a tab owns (text query, filter and folder scope) in one search.
+   * Switching tabs must restore the triple together, otherwise a scope typed in one tab keeps
+   * narrowing every other tab.
+   */
+  const queueTabSearch = useCallback(
+    (
+      next: { query: string; filterQuery: string; directoryQuery: string },
+      options?: QueueSearchOptions,
+    ) => {
+      queueSearchParams(
+        {
+          query: next.query,
+          filterQuery: next.filterQuery,
+          directoryQuery: next.directoryQuery,
+        },
+        options,
+      );
+    },
+    [queueSearchParams],
+  );
+
   useEffect(() => cancelPendingSearches, [cancelPendingSearches]);
 
   useEffect(() => {
@@ -585,6 +650,7 @@ export function useFileSearch(): UseFileSearchResult {
     queueSearchWithFilter,
     queueDirectorySearch,
     queueDirectoryScopeOpen,
+    queueTabSearch,
     handleStatusUpdate,
     setLifecycleState,
     requestRescan,

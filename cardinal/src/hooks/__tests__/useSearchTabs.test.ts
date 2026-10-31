@@ -30,6 +30,42 @@ describe('useSearchTabs', () => {
     });
   });
 
+  it('keeps each tab’s folder scope separate', () => {
+    // Regression: the scope lived in the shared search params, so a path typed in one tab
+    // silently narrowed every other tab.
+    const { result } = renderHook(() => useSearchTabs());
+    const firstId = result.current.tabs[0].id;
+
+    act(() => {
+      result.current.setActiveTabDirectory('/Volumes/nfs_D');
+    });
+    expect(result.current.tabs.find((tab) => tab.id === firstId)?.directoryQuery).toBe(
+      '/Volumes/nfs_D',
+    );
+
+    let secondId = '';
+    act(() => {
+      secondId = result.current.createTab('白咲碧', '', '');
+    });
+    // A brand new tab starts with no scope...
+    expect(result.current.tabs.find((tab) => tab.id === secondId)?.directoryQuery).toBe('');
+    // ...and the first tab keeps its own.
+    expect(result.current.tabs.find((tab) => tab.id === firstId)?.directoryQuery).toBe(
+      '/Volumes/nfs_D',
+    );
+
+    act(() => {
+      result.current.setActiveTabDirectory('~/Desktop');
+      result.current.activateTab(firstId);
+    });
+    expect(result.current.tabs.find((tab) => tab.id === firstId)?.directoryQuery).toBe(
+      '/Volumes/nfs_D',
+    );
+    expect(result.current.tabs.find((tab) => tab.id === secondId)?.directoryQuery).toBe(
+      '~/Desktop',
+    );
+  });
+
   it('only rewrites the active tab when its filter changes', () => {
     const { result } = renderHook(() => useSearchTabs());
     const firstId = result.current.tabs[0].id;

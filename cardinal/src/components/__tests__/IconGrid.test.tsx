@@ -1,7 +1,7 @@
 import React, { createRef } from 'react';
 import { fireEvent, render, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { IconGrid, ICON_SIZE_PRESETS } from '../IconGrid';
+import { IconGrid, ICON_SIZE_PRESETS, gridLabelAreaHeight, gridLabelWidth } from '../IconGrid';
 import type { IconGridHandle } from '../IconGrid';
 import type { SearchResultItem } from '../../types/search';
 import type { SlabIndex } from '../../types/slab';
@@ -60,6 +60,37 @@ describe('IconGrid scrolling', () => {
       configurable: true,
       get: () => 600,
     });
+  });
+
+  it('reserves three label lines derived from the base font size', () => {
+    // The tiled view must keep a uniform cell height: a three-line name takes space from the
+    // icon instead of making the row taller.
+    expect(gridLabelAreaHeight(13)).toBeGreaterThan(gridLabelAreaHeight(20) / 2);
+    expect(gridLabelAreaHeight(20)).toBeGreaterThan(gridLabelAreaHeight(13));
+
+    const { container } = render(
+      <IconGrid
+        results={results}
+        dataResultsVersion={1}
+        displayedResultsVersion={1}
+        iconSize="medium"
+        fontSize={20}
+        renderItem={(rowIndex, _item, style) => (
+          <div key={rowIndex} data-testid={`sized-${rowIndex}`} style={style} />
+        )}
+      />,
+    );
+
+    const first = container.querySelector('[data-testid="sized-0"]') as HTMLElement;
+    const expectedHeight = ICON_SIZE_PRESETS.medium + gridLabelAreaHeight(20);
+    expect(Number.parseFloat(first.style.height)).toBe(expectedHeight);
+    // The icon box caps itself at the preset size and shrinks for longer names.
+    expect(first.style.getPropertyValue('--icon-size')).toBe(`${ICON_SIZE_PRESETS.medium}px`);
+    // Six CJK glyphs must fit on a line, and the width follows the font-size setting.
+    expect(first.style.getPropertyValue('--label-width')).toBe(`${gridLabelWidth(20)}px`);
+    expect(gridLabelWidth(20)).toBeGreaterThan(gridLabelWidth(13));
+    // Rounded to whole pixels (94px for the default 16px font size).
+    expect(gridLabelWidth(20)).toBe(Math.round(20 * 0.78 * 6));
   });
 
   it('keeps grid items inside the viewport after scrolling', () => {

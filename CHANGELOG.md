@@ -1,6 +1,11 @@
 # Changelog
 
 ## Unreleased
+- Folder scope is now per search tab: typing a scope in one tab no longer narrows every other tab (including tabs opened from a bookmark).
+- Tiled view fills each name line greedily: a name like `白咲碧122614_0...` used to leave `白咲碧` alone on line 1 because `overflow-wrap: anywhere` moves a whole word down before splitting it.
+- Fix imported bookmark lists collapsing into 2px lines: rows are flex items inside a scroll container, so `overflow: hidden` zeroed their automatic minimum size and let them shrink.
+- Tiled view: names wrap to at most three lines of six CJK characters with an ellipsis. The icon box and the label box are both fixed height, so icons never shift between rows and the last text line of every tile shares one baseline.
+- Tiled view: square document/folder icons (which fill the icon box) get two text lines; 16:9 video covers keep three.
 - Merge newly added default ignore paths into lists saved by older releases. Without this, upgrades kept indexing `/Volumes` (network mounts), which made the first scan run for hours.
 - Persist folder-scope indexes (`scopes/scope-<hash>.db`) and reuse them for 30 minutes, so searching a slow network folder is instant on the next visit instead of re-walking it.
 - Load and build the index on a worker thread so searches answer immediately instead of queueing behind the initial walk.

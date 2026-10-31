@@ -240,6 +240,36 @@ describe('useFileSearch', () => {
     expect(searchCalls).toBeGreaterThanOrEqual(4);
   });
 
+  it('stops polling and reports a folder scope that is not a directory', async () => {
+    let searchCalls = 0;
+    mockedInvoke.mockImplementation((command: string) => {
+      if (command === 'get_app_status') {
+        return Promise.resolve('Ready');
+      }
+      if (command === 'search') {
+        searchCalls += 1;
+        return Promise.resolve({
+          results: [],
+          highlights: [],
+          statusCode: SearchStatusCode.SCOPE_UNAVAILABLE,
+          scope: '/Volumes/not-a-dir',
+        });
+      }
+      return Promise.resolve(null);
+    });
+
+    const { result } = renderHook(() => useFileSearch());
+    await waitFor(() => expect(result.current.state.unavailableScope).toBe('/Volumes/not-a-dir'));
+
+    expect(result.current.state.indexing).toBe(false);
+    expect(result.current.state.indexingScope).toBeNull();
+
+    // An unusable scope must not keep retrying: the poll effect keys off `indexing`.
+    const callsAfterError = searchCalls;
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    expect(searchCalls).toBe(callsAfterError);
+  });
+
   it('does not send directory scope while the scope input is inactive', async () => {
     mockSearchSuccess();
     const { result } = await renderReadySearchHook();

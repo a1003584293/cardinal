@@ -33,6 +33,8 @@
     "indexingProgress": "{{formatted}} files scanned. To search right away, enter a full folder path (for example ~/Documents) in the folder scope box.",
     "scopeIndexingTitle": "Indexing the selected folder...",
     "scopeIndexingMessage": "Scanned {{formatted}} entries in {{scope}}. Results appear here as soon as this folder is indexed.",
+    "scopeUnavailableTitle": "\"{{scope}}\" is not a folder",
+    "scopeUnavailableMessage": "Folder scope must be an existing directory, for example /Users/you/Documents or ~/Downloads. Clear the scope box to search everywhere.",
     "error": "Search Error",
     "emptyTitle": "No results for \"{{query}}\"",
     "emptyMessage": "Try adjusting your keywords or filters.",

@@ -60,9 +60,9 @@ function App() {
     queueSearch,
     appendResults,
     queueFilterQuery,
-    queueSearchWithFilter,
     queueDirectorySearch,
     queueDirectoryScopeOpen,
+    queueTabSearch,
     handleStatusUpdate,
     setLifecycleState,
     requestRescan,
@@ -83,6 +83,7 @@ function App() {
     searchError,
     indexing,
     indexingScope,
+    unavailableScope,
     lifecycleState,
   } = state;
 
@@ -186,6 +187,8 @@ function App() {
     directoryQuery,
     queueSearch,
     queueDirectorySearch,
+    // The folder scope is per tab, so mirror every edit into the active tab.
+    onDirectoryCommitted: searchTabs.setActiveTabDirectory,
     onNavigateFromSearchToResults: navigateFromSearchToResults,
   });
   const { filteredEvents } = useRecentFSEvents({
@@ -503,6 +506,7 @@ function App() {
   const displayState: DisplayState = (() => {
     if (!initialFetchCompleted) return 'loading';
     if (indexing) return 'indexing';
+    if (unavailableScope) return 'scope-unavailable';
     if (showLoadingUI) return 'loading';
     if (searchError) return 'error';
     if (results.length === 0) return 'empty';
@@ -617,16 +621,32 @@ function App() {
         // The filter rides along on the new tab; writing it through `setActiveTabFilter`
         // here would land on the *previous* active tab, because `createTab`'s state update
         // has not been committed yet. That is what used to rewrite the other tab's filter.
-        searchTabs.createTab(bookmark.query, bookmark.filterSearch);
+        searchTabs.createTab(bookmark.query, bookmark.filterSearch, '');
         selectFilterPreset(bookmark.filterSearch);
-      } else {
-        searchTabs.setActiveTabQuery(bookmark.query);
-        searchTabs.setActiveTabFilter(bookmark.filterSearch);
-        selectFilterPreset(bookmark.filterSearch);
+        // A new tab starts without a folder scope. Going through `queueSearchWithFilter`
+        // would keep the previous tab's scope in the shared search params, so the tab would
+        // look unscoped while actually searching a folder.
+        queueTabSearch(
+          { query: bookmark.query, filterQuery: bookmark.filterSearch, directoryQuery: '' },
+          { immediate: true },
+        );
+        return;
       }
-      queueSearchWithFilter(bookmark.query, bookmark.filterSearch, { immediate: true });
+
+      searchTabs.setActiveTabQuery(bookmark.query);
+      searchTabs.setActiveTabFilter(bookmark.filterSearch);
+      selectFilterPreset(bookmark.filterSearch);
+      // Reuse the active tab's own scope: opening a bookmark here is scoped like the tab.
+      queueTabSearch(
+        {
+          query: bookmark.query,
+          filterQuery: bookmark.filterSearch,
+          directoryQuery: searchTabs.activeTab.directoryQuery,
+        },
+        { immediate: true },
+      );
     },
-    [queueSearchWithFilter, searchTabs, selectFilterPreset],
+    [queueTabSearch, searchTabs, selectFilterPreset],
   );
 
   useEffect(() => {
@@ -661,16 +681,25 @@ function App() {
       // into the tab here would target the *previous* active tab, because `activateTab`'s
       // state update has not been committed yet.
       selectFilterPreset(tab.filterQuery);
-      queueSearchWithFilter(tab.query, tab.filterQuery, { immediate: true });
+      // The folder scope belongs to the tab too; restoring only query + filter left a scope
+      // typed in the previous tab narrowing every other tab.
+      queueTabSearch(
+        {
+          query: tab.query,
+          filterQuery: tab.filterQuery,
+          directoryQuery: tab.directoryQuery,
+        },
+        { immediate: true },
+      );
     },
-    [queueSearchWithFilter, searchTabs, selectFilterPreset],
+    [queueTabSearch, searchTabs, selectFilterPreset],
   );
 
   const handleTabAdd = useCallback(() => {
-    searchTabs.createTab('');
+    searchTabs.createTab('', '', '');
     selectFilterPreset('');
-    queueSearchWithFilter('', '', { immediate: true });
-  }, [queueSearchWithFilter, searchTabs, selectFilterPreset]);
+    queueTabSearch({ query: '', filterQuery: '', directoryQuery: '' }, { immediate: true });
+  }, [queueTabSearch, searchTabs, selectFilterPreset]);
 
   const handleTabClose = useCallback(
     (id: string, event: ReactMouseEvent) => {
@@ -691,10 +720,17 @@ function App() {
 
       if (wasActive) {
         selectFilterPreset(nextActive.filterQuery);
-        queueSearchWithFilter(nextActive.query, nextActive.filterQuery, { immediate: true });
+        queueTabSearch(
+          {
+            query: nextActive.query,
+            filterQuery: nextActive.filterQuery,
+            directoryQuery: nextActive.directoryQuery,
+          },
+          { immediate: true },
+        );
       }
     },
-    [queueSearchWithFilter, searchTabs, selectFilterPreset],
+    [queueTabSearch, searchTabs, selectFilterPreset],
   );
 
   const handleQueryInputChange = useCallback(
@@ -834,6 +870,7 @@ function App() {
                 displayState={displayState}
                 stateMessage={stateMessage}
                 stateTitle={stateTitle}
+                unavailableScope={unavailableScope}
                 currentQuery={currentQuery}
                 currentDirectoryQuery={currentDirectoryQuery}
                 resultsViewRef={virtualListRef}
@@ -841,6 +878,7 @@ function App() {
                 dataResultsVersion={resultsVersion}
                 displayedResultsVersion={displayedResultsVersion}
                 rowHeight={fontSettings.rowHeight}
+                fontSize={fontSettings.fontSize}
                 overscan={OVERSCAN_ROW_COUNT}
                 renderRow={renderRow}
                 renderGridItem={renderGridItem}

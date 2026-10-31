@@ -22,6 +22,8 @@ type FilesTabContentProps = {
   stateMessage: string | null;
   /** Title override for the indexing panel (names the folder being indexed). */
   stateTitle: string | null;
+  /** Folder scope the backend reported as unavailable. */
+  unavailableScope: string | null;
   currentQuery: string;
   currentDirectoryQuery: string;
   resultsViewRef: React.Ref<ResultsViewHandle>;
@@ -49,6 +51,8 @@ type FilesTabContentProps = {
   sortDisabledTooltip: string | null;
   viewMode: ResultsViewMode;
   iconSize: IconSizePreset;
+  /** Base UI font size in px; the tiled view reserves 3 label lines from it. */
+  fontSize: number;
   /** Requests the next page when the view nears the bottom (launch list paging). */
   onNearEnd?: () => void;
 };
@@ -60,6 +64,7 @@ export function FilesTabContent({
   displayState,
   stateMessage,
   stateTitle,
+  unavailableScope,
   currentQuery,
   currentDirectoryQuery,
   resultsViewRef,
@@ -77,6 +82,7 @@ export function FilesTabContent({
   sortDisabledTooltip,
   viewMode,
   iconSize,
+  fontSize,
   onNearEnd,
 }: FilesTabContentProps): React.JSX.Element {
   return (
@@ -98,6 +104,7 @@ export function FilesTabContent({
             state={displayState}
             message={stateMessage}
             title={stateTitle}
+            scope={unavailableScope}
             query={currentQuery}
             directoryQuery={currentDirectoryQuery}
           />
@@ -108,6 +115,7 @@ export function FilesTabContent({
             dataResultsVersion={dataResultsVersion}
             displayedResultsVersion={displayedResultsVersion}
             iconSize={iconSize}
+            fontSize={fontSize}
             renderItem={renderGridItem}
             onNearEnd={onNearEnd}
           />

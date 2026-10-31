@@ -31,14 +31,42 @@ export const ICON_SIZE_PRESETS: Record<IconSizePreset, number> = {
   xlarge: 192,
 };
 
-const LABEL_HEIGHT = 30;
 const CELL_GAP = 8;
+/** Max label lines in the tiled view; matches `-webkit-line-clamp` in App.css. */
+const LABEL_MAX_LINES = 3;
+/** Label font size as a multiple of the base UI font size; matches `.icon-grid-item__label`. */
+const LABEL_FONT_SCALE = 0.78;
+/** Label line height (unitless); matches `.icon-grid-item__label`. */
+const LABEL_LINE_HEIGHT = 1.2;
+/**
+ * Widest a label line may get, in CJK glyph widths. A full-width CJK glyph is one `em`, so
+ * six glyphs are the budget; Latin letters are narrower and fit more of themselves in it.
+ */
+const LABEL_MAX_CJK_CHARS = 6;
+
+/**
+ * Vertical space the name label may occupy. Derived from the base font size so the tile grid
+ * tracks the global font-size setting; keep in sync with the label rules in App.css.
+ */
+export const gridLabelAreaHeight = (fontSize: number): number =>
+  Math.round(fontSize * LABEL_FONT_SCALE * LABEL_LINE_HEIGHT * LABEL_MAX_LINES);
+
+/**
+ * Pixel width the name label may occupy: six CJK characters at the label font size. Computed
+ * here rather than in CSS so the value follows the global font-size setting exactly.
+ */
+export const gridLabelWidth = (fontSize: number): number =>
+  Math.round(fontSize * LABEL_FONT_SCALE * LABEL_MAX_CJK_CHARS);
+
+const DEFAULT_FONT_SIZE = 13;
 
 type IconGridProps = {
   results: SlabIndex[];
   dataResultsVersion: number;
   displayedResultsVersion: number;
   iconSize: IconSizePreset;
+  /** Base UI font size in px, used to reserve room for up to three label lines. */
+  fontSize?: number;
   renderItem: (
     rowIndex: number,
     item: SearchResultItem | undefined,
@@ -55,7 +83,15 @@ const clamp = (value: number, min: number, max: number): number =>
 // Mirrors VirtualList's lazy hydration + custom scrollbar approach but lays
 // items out in a fixed number of columns derived from the container width.
 export const IconGrid = forwardRef<IconGridHandle, IconGridProps>(function IconGrid(
-  { results, dataResultsVersion, displayedResultsVersion, iconSize, renderItem, onNearEnd },
+  {
+    results,
+    dataResultsVersion,
+    displayedResultsVersion,
+    iconSize,
+    fontSize = DEFAULT_FONT_SIZE,
+    renderItem,
+    onNearEnd,
+  },
   ref,
 ) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -72,8 +108,14 @@ export const IconGrid = forwardRef<IconGridHandle, IconGridProps>(function IconG
     iconSize: gridIconRasterSize,
   });
 
-  const cellWidth = ICON_SIZE_PRESETS[iconSize] + CELL_GAP * 2;
-  const cellHeight = ICON_SIZE_PRESETS[iconSize] + LABEL_HEIGHT + CELL_GAP * 2;
+  const iconPixels = ICON_SIZE_PRESETS[iconSize];
+  const labelAreaHeight = gridLabelAreaHeight(fontSize);
+  const labelWidth = gridLabelWidth(fontSize);
+  const cellWidth = iconPixels + CELL_GAP * 2;
+  // The cell always reserves room for three label lines, so rows stay evenly spaced and the
+  // last text line of every tile lands on the same baseline. The icon keeps its preset size;
+  // the text grows downward into the reserved area instead of pushing the icon around.
+  const cellHeight = iconPixels + labelAreaHeight + CELL_GAP * 2;
 
   const columnCount = useMemo(
     () => (viewportWidth > 0 ? Math.max(1, Math.floor(viewportWidth / cellWidth)) : 1),
@@ -239,9 +281,14 @@ export const IconGrid = forwardRef<IconGridHandle, IconGridProps>(function IconG
           // `scrollTop` rows pushed past the clipped viewport disappear.
           top: row * cellHeight + CELL_GAP - scrollTop,
           left: column * cellWidth + CELL_GAP,
-          width: ICON_SIZE_PRESETS[iconSize],
-          height: ICON_SIZE_PRESETS[iconSize] + LABEL_HEIGHT,
-        }),
+          width: iconPixels,
+          height: iconPixels + labelAreaHeight,
+          // `.icon-grid-item__icon` caps itself at this size and shrinks when the label wraps.
+          '--icon-size': `${iconPixels}px`,
+          '--label-width': `${labelWidth}px`,
+          // Fixed height so a three-line name never takes space from the icon.
+          '--label-height': `${labelAreaHeight}px`,
+        } as CSSProperties),
       );
     }
     return items;
@@ -252,7 +299,9 @@ export const IconGrid = forwardRef<IconGridHandle, IconGridProps>(function IconG
     columnCount,
     cellHeight,
     cellWidth,
-    iconSize,
+    iconPixels,
+    labelAreaHeight,
+    labelWidth,
     scrollTop,
     getItem,
     renderItem,

@@ -62,6 +62,11 @@ pub enum SearchJobResult {
     ScopedIndexing {
         scope: String,
     },
+    /// The folder scope does not exist (or is not a directory). Retrying cannot help, so the
+    /// frontend must stop polling and say so.
+    ScopeUnavailable {
+        scope: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -262,6 +267,8 @@ impl SearchResponse {
     pub const INDEXING: u8 = 2;
     /// A temporary index for the requested folder scope is being built.
     pub const SCOPED_INDEXING: u8 = 3;
+    /// The folder scope is not a directory; retrying will not help.
+    pub const SCOPE_UNAVAILABLE: u8 = 4;
 }
 
 #[derive(Serialize)]
@@ -350,6 +357,12 @@ pub async fn search(
             highlights: vec![],
             scope: Some(scope),
             status_code: SearchResponse::SCOPED_INDEXING,
+        }),
+        Ok(SearchJobResult::ScopeUnavailable { scope }) => Ok(SearchResponse {
+            results: vec![],
+            highlights: vec![],
+            scope: Some(scope),
+            status_code: SearchResponse::SCOPE_UNAVAILABLE,
         }),
         Ok(SearchJobResult::Completed(res)) => res
             .map(|SearchOutcome { nodes, highlights }| {

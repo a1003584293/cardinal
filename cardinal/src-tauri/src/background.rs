@@ -202,6 +202,8 @@ enum SearchAction {
     RestoreFullAndAnswer,
     /// Swap a previously built scope index back in, then answer.
     ReuseScope,
+    /// The scope is not a directory; tell the frontend instead of retrying.
+    ScopeUnavailable,
     /// Start a temporary walk of this folder.
     BuildScope(PathBuf),
     /// Nothing can answer yet; the frontend retries later.
@@ -230,7 +232,11 @@ fn decide_search_action(
         if covered_by_full {
             return SearchAction::RestoreFullAndAnswer;
         }
-        if scoped.is_building(scope) || scoped.is_unusable(scope) {
+        if scoped.is_unusable(scope) {
+            // Not a directory: polling again would spin forever.
+            return SearchAction::ScopeUnavailable;
+        }
+        if scoped.is_building(scope) {
             return SearchAction::Wait;
         }
         return SearchAction::BuildScope(scope.to_path_buf());
@@ -971,6 +977,12 @@ pub fn run_background_event_loop(
                             scope: scope.to_string_lossy().into_owned(),
                         })
                     }
+                    SearchAction::ScopeUnavailable => Some(SearchJobResult::ScopeUnavailable {
+                        scope: scope
+                            .as_deref()
+                            .map(|scope| scope.to_string_lossy().into_owned())
+                            .unwrap_or_default(),
+                    }),
                     SearchAction::Wait => None,
                 };
 
@@ -2113,6 +2125,7 @@ mod tests {
             SearchAction::Answer => "answer",
             SearchAction::RestoreFullAndAnswer => "restore-full",
             SearchAction::ReuseScope => "reuse-scope",
+            SearchAction::ScopeUnavailable => "scope-unavailable",
             SearchAction::BuildScope(_) => "build-scope",
             SearchAction::Wait => "wait",
         }
@@ -2254,14 +2267,14 @@ mod tests {
             "restore-full"
         );
 
-        // Not a directory: never retry until the scope changes.
+        // Not a directory: report it instead of retrying forever.
         let state = ScopedIndexState {
             unusable: Some(scope.clone()),
             ..Default::default()
         };
         assert_eq!(
             describe_search_action(Some(&scope), true, &state, false),
-            "wait"
+            "scope-unavailable"
         );
     }
 

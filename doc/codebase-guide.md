@@ -183,6 +183,10 @@ cargo fmt --all
    - 空格子定位必须是 `top: row * cellHeight + CELL_GAP - scrollTop`：`.virtual-list-viewport` 是 `overflow-y: hidden`，滚动完全靠 `scrollTop` 状态驱动，漏减 `scrollTop` 会让下方行被裁掉（曾表现为"越滚越空"）
    - `scrollToRow` 必须实现 `nearest/start/end/center` 对齐；简化的"直接滚到 row*cellHeight"会让右键选中把视图顶飞
    - 图标栅格由 `useDataLoader({ iconSize })` 决定：列表 32px，平铺按当前档位 ×2（上限 384px）。`iconSize` 变化会清空行缓存并重新拉取
+   - **换行必须贪婪填充**：用 `word-break: break-all`。`overflow-wrap: anywhere` 会先把整个"单词"挪到下一行、装不下才拆，于是 `白咲碧122614_0...` 会把 `白咲碧` 单独留在第一行
+   - **文件名最多 3 行、每行 6 个汉字宽**：`gridLabelWidth()` = `fontSize × 0.78 × 6`，通过 `--label-width` 传给 `.icon-grid-item__label-text`；行数由 `-webkit-line-clamp: 3` 截断并显示 `…`。字母比汉字窄，所以同样宽度能放更多字符
+   - **两个盒子都固定**：`.icon-grid-item__icon` 是 `flex: 0 0 var(--icon-size)`，`.icon-grid-item__label` 是 `flex: 0 0 var(--label-height)`（三行高）+ `align-items: flex-end`。图标永不伸缩，文字在框内底部对齐 —— 这才是 Everything 的行为：量它的截图可见图标底边全部落在同一行（y=200），文字末行全部落在 y≈257
+   - **高图标只给 2 行**：`IconGridItem` 在 `<img onLoad>` 里读 `naturalHeight / naturalWidth`，`>= TALL_ARTWORK_RATIO(0.9)` 就加 `data-lines="two"`（`-webkit-line-clamp: 2`）。NSWorkspace 的文档/文件夹图标是正方形画布（比例≈1.0）所以算高；QuickLook 视频封面是 16:9（≈0.56）所以能放 3 行
 3. **多标签页**（`src/components/SearchTabsBar.tsx` + `src/hooks/useSearchTabs.ts`）：只保存 query，切换标签触发重搜
 4. **书签右键菜单**：在当前标签页搜索（替换）/ 在新标签页搜索
 
@@ -315,6 +319,7 @@ cargo fmt --all
 | 想改什么 | 去哪 |
 |---|---|
 | 搜索逻辑/防抖/结果状态 | `src/hooks/useFileSearch.ts` |
+| 多标签页状态（query/filter/**目录范围**） | `src/hooks/useSearchTabs.ts`（三者都按 tab 存） |
 | 搜索框行为 | `SearchBar.tsx` + `useFilesTabState.ts` |
 | 结果列表渲染/虚拟滚动 | `VirtualList.tsx` + `FileRow.tsx` |
 | 行数据/图标懒加载 | `useDataLoader.ts` + `useIconViewport.ts` |
@@ -344,6 +349,7 @@ cargo fmt --all
 | 书签面板拖动/缩放 | `usePanelDrag.ts`（位置 + 尺寸持久化） |
 | 首页懒加载分页 | `background.rs` 的 `RECENT_SNAPSHOT_SIZE` + `get_recent_nodes` + `SEARCH_APPEND` |
 | 文件大小/时间格式化 | `utils/format.ts` 的 `formatSize` / `formatTimestamp` |
+| 平铺视图文件名行数/宽度 | `IconGrid.tsx` 的 `gridLabelWidth` / `gridLabelAreaHeight` + `IconGridItem.tsx` 的 `TALL_ARTWORK_RATIO` + App.css 的 `.icon-grid-item__*` |
 | 书签行样式/分隔线 | `App.css` 的 `.bookmarks-bookmark-row` + `--bookmark-row-border` |
 | 筛选器选中态（不持久化） | `useSearchFilters.ts` 的 `selectedId` |
 | 结果区右键排序 | `SortMenu.tsx` + `useRemoteSort` 的 `sortScopeKey` |

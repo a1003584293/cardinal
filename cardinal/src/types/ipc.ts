@@ -32,6 +32,8 @@ export enum SearchStatusCode {
   INDEXING = 2,
   /** A temporary index for the requested folder scope is being built; retry shortly. */
   SCOPED_INDEXING = 3,
+  /** The folder scope is not a directory; retrying cannot help. */
+  SCOPE_UNAVAILABLE = 4,
 }
 
 export type SearchResponsePayload = {
