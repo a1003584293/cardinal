@@ -2,5 +2,6 @@ target
 .DS_Store
 .vscode
 
-# Separate git repository (WinNFSd mount helper); never commit its files here.
+# Separate git repositories checked out inside this directory; never commit their files.
 winnfsd/
+HypoMux/
